@@ -22,7 +22,8 @@ contains
     !call unittest_comptools()
     !call unittest_trajdata()
     !call unittest_simulate_trajdata()
-    call unittest_solver_properties()
+    !call unittest_solver_properties()
+    !call unittest_solver_timing()
     !call unittest_TGtrajs()  ! To update
     !call unittest_IO()
     !call unittest_memorytest()
@@ -30,7 +31,7 @@ contains
     !call unittest_inference_parallel()
     ! call unittest_2DLik()
     !call unittest_FPsolver_INPUT()
-    !call unittest_solver_convergence()
+    call unittest_solver_convergence()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -434,7 +435,7 @@ contains
   end function compare_traj
 
   subroutine unittest_solver_properties()
-    type(field) :: q, K11, K22, K12, psi, dx, dy
+    type(field) :: q, K11, K22, K12, psi
     integer :: m, n
     integer :: i, j
 
@@ -450,13 +451,11 @@ contains
 
     type(field) :: q0
     real(kind=dp) :: q_int_0
-    real(kind=dp) :: err_int, err_ub, CourantN, u_max
-    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
+    real(kind=dp), dimension(:,:), allocatable :: dqx, dqy
 
     type(T_operator), dimension(:,:), pointer :: T_ops
     
     real(kind=dp), dimension(:,:), allocatable :: exactval
-    type(timer), save :: DS_timer, DS2_timer
 
     m = 4
     n = m
@@ -645,7 +644,7 @@ contains
 
     call print_array(psi%data, "psi")
     do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
+      call timestep_heun_Kflux(q, dt, K_e)
       call timestep_LMT(q, dt, uv_fld)
 
       if (mod(i, floor(nts/25.0_dp)) .eq. 0) then
@@ -692,7 +691,7 @@ contains
     call imposeBC(K_e)
 
     do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
+      call timestep_heun_Kflux(q, dt, K_e)
       call timestep_LMT(q, dt, uv_fld)
     end do
 
@@ -711,71 +710,6 @@ contains
     call deallocate(K11)
     call deallocate(K22)
     call deallocate(K12)
-    
-    ! Test 1DS and 1DS2 equivalence
-    m = 16
-    n = 16
-    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
-    call allocate(q0, m, n, 'q0', glayer=gl, type_id=0)
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
-    
-    call manual_field(psi, 6)  ! Rigid body rotation
-
-    call set(K11, 1.0_dp)
-    call set(K22, 1.0_dp)
-    call set(K12, 0.0_dp)
-
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
-    
-    call manual_field(q, 4)
-    call imposeBC(q)
-    call set(q0, q)
-    
-    call reset(DS_timer)
-    call start(DS_timer)
-    do i = 1, 64*24*2
-      call timestep_fe_Kflux(q, dt, K_e)
-      call timestep_LMT_1DS(q, dt, uv_fld)
-    end do
-    call stop(DS_timer)
-    
-    call reset(DS2_timer)
-    call start(DS2_timer)
-    do i = 1, 64*24*2
-      call timestep_fe_Kflux(q0, dt, K_e)
-      call timestep_LMT_1DS2(q0, dt, uv_fld)
-    end do
-    call stop(DS2_timer)
-    
-    write(6, "(a)") "1DS timers:"
-      call print(DS_timer, "Sub-optimal", prefix = "  ")
-
-    write(6, "(a)") "1DS2 timers:"
-      call print(DS2_timer, "Sub-optimal", prefix = "  ")
-    
-    call addto(q0, q, -1.0_dp)
-    
-    if (iszero(q0%data)) then
-      write(6, *) " -- P: 1DS consistent with 1DS2 --"
-    else
-      call print_array(q%data, 'q-q0')
-      call abort_handle(" ! FAIL  @ 1DS/1DS2 consistency", __FILE__, __LINE__)
-    end if
-
-    call deallocate(q)
-    call deallocate(q0)
-    call deallocate(psi)
-    call deallocate(K11)
-    call deallocate(K22)
-    call deallocate(K12)
-
-    stop
     
     ! Test for MPFA
     m = 32+1
@@ -844,11 +778,11 @@ contains
     write(6, "(a)") &
       "! ----------- Passed unittest_solver_properties ----------- !"
   end subroutine unittest_solver_properties
-
-  subroutine unittest_solver_convergence()
-    type(field) :: q, K11, K22, K12, psi, q_steady
+  
+  subroutine unittest_solver_timing()
+    type(field) :: q, K11, K22, K12, psi
     integer :: m, n
-    integer :: i, j
+    integer :: i
 
     type(uv_signed) :: uv_fld
     type(K_flux) :: K_e
@@ -857,32 +791,140 @@ contains
 
     real(kind=dp) :: t = 12.0_dp*3.1415926_dp
     real(kind=dp) :: dt
-    integer :: nts = 10000
-    integer :: ind = 0
+    integer :: nts = 64*16
 
-    type(field) :: q0
-    real(kind=dp) :: q_int_0
-    real(kind=dp) :: err_int, err_ub, CourantN, u_max
+    type(field) :: q2, qLW
 
-    type(T_operator), dimension(:,:), pointer :: T_ops
     
-    real(kind=dp), dimension(:,:), allocatable :: exactval
-      
-    ! Test spatial accuarcy (integrating to steady state)
-    write(6, *) " Timestepping to steady state"
-    write(6, *) " nts = 512*m "
-    do i = 1, 8
-      m = 2 ** (i+3)
-      !write(6, *) "m(",i,") =", m, "; error(",i,") = ", compute_spatial_err(m, 2)  ! 2: stat state
+    type(timer), save :: DS_timer, DS2_timer, LW_timer
+    
+    ! Test 1DS and 1DS2 equivalence
+    m = 64
+    n = m
+    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
+    call allocate(q2, m, n, 'q2', glayer=gl, type_id=0)
+    call allocate(qLW, m, n, 'qLW', glayer=gl, type_id=0)
+    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
+
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    
+    call manual_field(psi, 7)  ! TG
+
+    call set(K11, 2.0_dp)
+    call set(K22, 1.0_dp)
+    call set(K12, 0.5_dp)
+
+    call allocate(uv_fld, psi)
+    call allocate(K_e, K11, K22, K12)
+    call imposeBC(K_e)
+    
+    call manual_field(q, 4)
+    call imposeBC(q)
+    call set(q2, q)
+    call set(qLW, q)
+    dt = t / real(nts, kind=dp)
+    
+    ! 1DS
+    call reset(DS_timer)
+    call start(DS_timer)
+    do i = 1, nts
+      call timestep_heun_Kflux(q, 0.5_dp*dt, K_e)
+      call timestep_LMT_1DS(q, dt, uv_fld)
+      call timestep_heun_Kflux(q, 0.5_dp*dt, K_e)
     end do
+    call stop(DS_timer)
+    
+    ! 1DS2
+    ! TODO: validate identical
+    call reset(DS2_timer)
+    call start(DS2_timer)
+    do i = 1, nts
+!       call timestep_heun2_Kflux(q2, 0.5_dp*dt, K_e)
+!       call timestep_LMT_1DS2(q2, dt, uv_fld)
+!       call timestep_heun2_Kflux(q2, 0.5_dp*dt, K_e)
+       call timestep_heun2_Kflux(q2, dt, K_e)
+       call timestep_LMT_2D(q2, dt, uv_fld)
+       ! First order
+!        call timestep_fe_Kflux(q2, dt, K_e)
+!        call timestep_LMT_1DS3(q2, dt, uv_fld)
+    end do
+    call stop(DS2_timer)
+    
+    ! Lax Wendoff
+    call reset(LW_timer)
+    call start(LW_timer)
+    do i = 1, nts
+      call timestep_heun_Kflux(qLW, 0.5_dp*dt, K_e)
+      call timestep_LaxWendoff(qLW, dt, uv_fld)
+      call timestep_heun_Kflux(qLW, 0.5_dp*dt, K_e)
+    end do
+    call stop(LW_timer)
+    
+    write(6, "(a)") "1DS timers:"
+      call print(DS_timer, "Sub-optimal", prefix = "  ")
+
+    write(6, "(a)") "1DS2 timers:"
+      call print(DS2_timer, "Sub-optimal", prefix = "  ")
+      
+    write(6, "(a)") "LW timers:"
+      call print(LW_timer, "Sub-optimal", prefix = "  ")
+    
+!     call print_array(q%data, 'q')
+!     call print_array(q2%data, 'q2')
+
+    call addto(q2, q, -1.0_dp)
+    
+    if (iszero(q2%data)) then
+      write(6, *) " -- P: 1DS consistent with 1DS2 --"
+    else
+      !call print_array(q2%data, 'q2-q')
+      call abort_handle(" ! FAIL  @ 1DS/1DS2 consistency", __FILE__, __LINE__)
+    end if
+    
+    call addto(qLW, q, -1.0_dp)
+    
+    if (iszero(qLW%data)) then
+      write(6, *) " -- P: 1DS consistent with LW --"
+    else
+      call abort_handle(" ! FAIL  @ 1DS/LW consistency", __FILE__, __LINE__)
+    end if
+    
+    
+
+    call deallocate(q)
+    call deallocate(q2)
+    call deallocate(qLW)
+    call deallocate(psi)
+    call deallocate(K11)
+    call deallocate(K22)
+    call deallocate(K12)
+    
+    write(6, "(a)") &
+      "! ----------- Passed unittest_solver_timing ----------- !"
+  end subroutine unittest_solver_timing
+
+  subroutine unittest_solver_convergence()
+    integer :: i, m
+    integer :: nts 
+      
+!     ! Test spatial accuarcy (integrating to steady state)
+!     write(6, *) " Timestepping to steady state"
+!     write(6, *) " nts = 512*m "
+!     do i = 1, 8
+!       m = 2 ** (i+3)
+!       !write(6, *) "m(",i,") =", m, "; error(",i,") = ", compute_spatial_advection_err(m, 2)  ! 2: stat state
+!     end do
     
     ! Test temporal accuarcy (periodic solution)
     write(6, *) " Timestepping to periodic state"
     write(6, *) " Scale dt = C dx"
+    write(6, *) " nts = 128*m "
     do i = 1, 8
       m = 2 ** (i+3)
-      nts = 256* m
-      write(6, *) "nts(",i,") =", nts, "; error(",i,") = ", compute_temporal_err(m, nts, 1)  ! 1: periodic
+      nts = 128* m
+      write(6, *) "nts(",i,") =", nts, "; error(",i,") = ", compute_temporal_err(m, nts)  ! 1: periodic
     end do
     
     write(6, "(a)") &
@@ -890,10 +932,10 @@ contains
   end subroutine unittest_solver_convergence
   
   
-  real(kind=dp) function compute_spatial_err(m, test_id)
+  real(kind=dp) function compute_spatial_err(m)
     ! Source term: stationary, with lambda decay
     !  S(x,y,t) = F(x,y)-lambda*(q_stat-q)
-    integer, intent(in) :: m, test_id
+    integer, intent(in) :: m
     
     type(field) :: q, K11, K22, K12, psi
     integer :: n, i
@@ -940,14 +982,14 @@ contains
     do i = 1, nts
       ! Strang splitting
       ! A
-      call timestep_fe_Kflux_Src_stat(q, dt, K_e, 1.0_dp)  ! Last argument = lambda
-      !call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
+      !call timestep_fe_Kflux_Src_stat(q, dt, K_e, 1.0_dp)  ! Last argument = lambda
+      call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
       ! B
       call timestep_LMT_1DS(q, dt, uv_fld)
 
       ! A
       !call timestep_fe_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 1.0_dp)
-      !call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
+      call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
     end do
     call write(q, "./unittest/convergence/q_final", nts*dt, nts)
     
@@ -970,8 +1012,8 @@ contains
     compute_spatial_err = err_int
   end function compute_spatial_err
   
-  real(kind=dp) function compute_temporal_err(m, nts, test_id)
-    integer, intent(in) :: m, nts, test_id
+  real(kind=dp) function compute_temporal_err(m, nts)
+    integer, intent(in) :: m, nts
     
     type(field) :: q, K11, K22, K12, psi
     integer :: n, i
@@ -1002,10 +1044,14 @@ contains
     call testcase_fields(psi, K11, K22, K12, q_exact, 1)
     call imposeBC(q_exact)
     
+    ! TODO
+!     call set(K11, 0.0_dp)
+!     call set(K22, 0.0_dp)
+!     call set(K12, 0.0_dp)    
+    
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
     call imposeBC(K_e)
-    
     
     ! Set inital condition to zero
     call set(q, q_exact)
@@ -1020,20 +1066,16 @@ contains
       
       ! Strang splitting
       ! A
-      !call timestep_fe_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
-      call timestep_fe_Kflux_Src_nonstat(q, dt, t_i, K_e)
-      !call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
+      call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
+      !call timestep_heun_Kflux_Src_nonstat(q, dt, t_i, K_e)
       ! B
-      call timestep_LMT_1DS(q, dt, uv_fld)
-      
+      call timestep_LMT_2D(q, dt, uv_fld)
       ! A
-      !call timestep_fe_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
-      !call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
-      !call write(q, "./unittest/convergence/q", i*dt, i)
+      call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i+0.5_dp*dt, K_e)
       
       call set(q_err, q)
       ! Compare q with exact stat state
-      call assign_q_periodic(q_exact, t_i)
+      call assign_q_periodic(q_exact, t_i+dt)
       call imposeBC(q_exact)
       call addto(q_err, q_exact, -1.0_dp)
       err_int = dsqrt(int_sq_field(q_err)/(m * n))
@@ -1055,7 +1097,7 @@ contains
     call deallocate(uv_fld)
     call deallocate(K_e)
     
-    compute_temporal_err = err_int
+    compute_temporal_err = err_sup
   end function compute_temporal_err
   
   pure logical function rotsym(fld)
@@ -1178,7 +1220,7 @@ contains
     call print_info(psi, dt)
     
     do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
+      call timestep_heun_Kflux(q, dt, K_e)
       call timestep_LMT(q, dt, uv_fld)
 
       if (mod(i, nts/n_output) .eq. 0) then
@@ -1799,7 +1841,6 @@ contains
     real(kind=dp) :: sc, h, dt
     integer :: nts
     real(kind=dp), dimension(:), allocatable :: logPost
-    real(kind=dp) :: SlogPost, SlogPost_local
 
     integer, parameter :: Td = 30
     character(len = *), parameter :: RunProfile = "TTG_sinusoidal"

@@ -23,8 +23,19 @@ make
 
 
 #nohup mpirun -n 1  ./advdiff > temporal_error_LaxWendoff_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_LW2D2nd_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_MC2D2nd_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_LW2D_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_MC2D_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_MM2D_dx.txt &
+#nohup mpirun -n 1  ./advdiff > ./unittest/convergence/log/temporal_error_SB2D_dx.txt &
 #nohup mpirun -n 1  ./advdiff > temporal_error_LaxWendoff_dxsq.txt &
 #nohup mpirun -n 1  ./advdiff > temporal_error_MC_dx.txt &
+#nohup mpirun -n 1  ./advdiff > temporal_error_2DMC_dx.txt &
+#nohup mpirun -n 1  ./advdiff > temporal_error_MM_dx.txt &
+#nohup mpirun -n 1  ./advdiff > temporal_error_2DMM_dx.txt &
+#nohup mpirun -n 1  ./advdiff > temporal_error_Sweby_dx.txt &
+#nohup mpirun -n 1  ./advdiff > temporal_error_2DSweby_dx.txt &
 #nohup mpirun -n 1  ./advdiff > temporal_error_MC_dxsq.txt &
 #nohup mpirun -n 1  ./advdiff > spatial_error_MC_dx.txt &
 #nohup mpirun -n 1  ./advdiff > spatial_error_LaxWendoff_dx.txt &

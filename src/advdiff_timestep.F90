@@ -9,7 +9,8 @@ module advdiff_timestep
 
   private
 
-  public :: timestep_heun_K, timestep_LMT, timestep_fe_Kflux
+  public :: timestep_heun_Kflux, timestep_LMT, timestep_fe_Kflux
+  public :: timestep_heun2_Kflux
   public :: imposeBC, eval_dqdt
   public :: advdiff_q
   public :: timestep_heun_T_ops
@@ -20,8 +21,8 @@ module advdiff_timestep
   public :: maxmax, print_info
   public :: timestep_fe_Kflux_Src_stat, timestep_fe_Kflux_Src_nonstat
   public :: timestep_heun_Kflux_Src_stat, timestep_heun_Kflux_Src_nonstat
-  public :: timestep_LMT_1DS, timestep_LMT_1DS2
-  
+  public :: timestep_LMT_1DS, timestep_LMT_1DS2, timestep_LaxWendoff, timestep_LMT_1DS3
+  public :: timestep_LMT_2D
   
   interface eval_dqdt
     module procedure eval_dqdt_Kfull, eval_dqdt_FG
@@ -30,10 +31,6 @@ module advdiff_timestep
   interface imposeBC
     module procedure imposeBC_q, imposeBC_FG, imposeBC_Kflux
   end interface imposeBC
-
-  interface timestep_heun_K
-    module procedure timestep_heun_Kflux
-  end interface timestep_heun_K
 
   interface print_info
     module procedure print_info_timestepPing
@@ -68,7 +65,7 @@ contains
     type(field), intent(in) :: q
     type(uv_signed), intent(in) :: uv_fld
 
-    integer :: i, j, gl
+    integer :: gl
     real(kind = dp), dimension(:, :), pointer :: lq, lup, lum, lvp, lvm
 
     lq => q%data
@@ -95,7 +92,7 @@ contains
     type(uv_signed), intent(in) :: uv_fld
 
     integer :: i, j, gl
-    real(kind = dp), dimension(:, :), pointer :: lq, lup, lum, lvp, lvm
+    real(kind = dp), dimension(:, :), pointer :: lq, lup, lum
 
     lq => q%data
     lup => uv_fld%up
@@ -114,25 +111,6 @@ contains
     end do
 
   end subroutine assemble_F_DCU
-
-  subroutine assemble_F_DCU2(F, q, lup, lum)
-    real(kind=dp), dimension(:,:), intent(out) :: F
-    type(field), intent(in) :: q
-    real(kind = dp), dimension(:, :), pointer, intent(in) :: lup, lum
-
-    integer :: i, j, gl
-    real(kind = dp), dimension(:, :), pointer :: lq
-
-    lq => q%data
-    gl = q%glayer
-
-    do j = 1, size(F, 2)
-      do i = 1, size(F, 1)
-        F(i,j) = lum(i,j)*lq(i+gl, j+gl) + lup(i,j)*lq(i+gl-1, j+gl)
-      end do
-    end do
-
-  end subroutine assemble_F_DCU2
   
   subroutine assemble_G_DCU(G, q, uv_fld)
     real(kind=dp), dimension(:,:), intent(out) :: G
@@ -140,7 +118,7 @@ contains
     type(uv_signed), intent(in) :: uv_fld
 
     integer :: i, j, gl
-    real(kind = dp), dimension(:, :), pointer :: lq, lup, lum, lvp, lvm
+    real(kind = dp), dimension(:, :), pointer :: lq, lvp, lvm
 
     lq => q%data
     lvp => uv_fld%vp
@@ -159,6 +137,25 @@ contains
     end do
 
   end subroutine assemble_G_DCU
+  
+  subroutine assemble_F_DCU2(F, q, lup, lum)
+    real(kind=dp), dimension(:,:), intent(out) :: F
+    type(field), intent(in) :: q
+    real(kind = dp), dimension(:, :), pointer, intent(in) :: lup, lum
+
+    integer :: i, j, gl
+    real(kind = dp), dimension(:, :), pointer :: lq
+
+    lq => q%data
+    gl = q%glayer
+
+    do j = 1, size(F, 2)
+      do i = 1, size(F, 1)
+        F(i,j) = lum(i,j)*lq(i+gl, j+gl) + lup(i,j)*lq(i+gl-1, j+gl)
+      end do
+    end do
+
+  end subroutine assemble_F_DCU2
   
   subroutine assemble_G_DCU2(G, q, lvp, lvm)
     real(kind=dp), dimension(:,:), intent(out) :: G
@@ -254,72 +251,31 @@ contains
 
   end subroutine assemble_FG_CTU
 
-  pure real(kind=dp) function phi_limiter(theta)
+  pure real(kind=dp) function philim(theta)
     real(kind=dp), intent(in) :: theta
 
+    ! minmod
+    !philim = max(0.0_dp, min(1.0_dp, theta))
+
     ! Superbee
-    !phi_limiter = max(0.0_dp, min(1.0_dp, 2.0_dp*theta), min(2.0_dp, theta))
+    !philim = max(0.0_dp, min(1.0_dp, 2.0_dp*theta), min(2.0_dp, theta))
 
     ! MC
-    !phi_limiter = max(0.0_dp, min(0.5_dp*(1.0_dp+theta), 2.0_dp, 2.0_dp*theta))
+    !philim = max(0.0_dp, min(0.5_dp*(1.0_dp+theta), 2.0_dp, 2.0_dp*theta))
 
     ! Sweby
-    !phi_limiter = max(0.0_dp, min(1.0_dp, 1.5_dp*theta), min(1.5_dp, theta))
-    !phi_limiter = 0.0_dp
+    !philim = max(0.0_dp, min(1.0_dp, 1.5_dp*theta), min(1.5_dp, theta))
     
     ! Lax-Wendoff
-    phi_limiter = 1.0_dp
-  end function phi_limiter
-  
-  subroutine assemble_phi_x(phi_x, dqx, lu_sgn)
-    real(kind=dp), dimension(:,:), intent(out) :: phi_x
-    real(kind=dp), dimension(:,:), intent(in) :: dqx
-    integer, dimension(:, :), pointer, intent(in) :: lu_sgn
+    philim = 1.0_dp
     
-    integer :: i, j
-
-    real(kind = dp) :: theta_x
-
-    ! LeVeque p119
-    !! phi_x(i,j) aligned with F(i,j) & dqx(i,j) & u(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
-    do j = 1, size(phi_x, 2)
-      do i = 2, size(phi_x, 1)-1
-        if (dabs(dqx(i,j)) < 1.0e-13) then
-          theta_x = sign(1.0_dp, dqx(i,j)) * 1.0e14
-        else
-          theta_x = dqx(i-lu_sgn(i,j), j)/dqx(i,j)
-        end if
-        
-        phi_x(i,j)  = phi_limiter(theta_x)
-      end do
-    end do
+    ! Beam-Warming
+    !philim = theta
     
-  end subroutine assemble_phi_x
-  
-  subroutine assemble_phi_y(phi_y, dqy, lv_sgn)
-    real(kind=dp), dimension(:,:), intent(out) :: phi_y
-    real(kind=dp), dimension(:,:), intent(in) :: dqy
-    integer, dimension(:, :), pointer, intent(in) :: lv_sgn
+    ! Upwind scheme
+    !philim = 0.0_dp
 
-    integer :: i, j
-
-    real(kind = dp) :: theta_y
-
-    ! LeVeque p119
-    !! phi_x(i,j) aligned with F(i,j) & dqx(i,j) & u(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
-    do j = 2, size(phi_y, 2)-1
-      do i = 1, size(phi_y, 1)
-        if (dabs(dqy(i,j)) < 1.0e-13) then
-          theta_y = sign(1.0_dp, dqy(i,j)) * 1.0e14
-        else
-          theta_y = dqy(i, j-lv_sgn(i,j))/dqy(i,j)
-        end if
-        
-        phi_y(i,j)  = phi_limiter(theta_y)
-      end do
-    end do
-    
-  end subroutine assemble_phi_y
+  end function philim
 
   subroutine assemble_FG_limiter(F,G, dqx, dqy, uv_fld, dt)
     real(kind=dp), dimension(:,:), intent(inout) :: F,G
@@ -343,8 +299,6 @@ contains
     integer, dimension(:, :), pointer :: lu_sgn
     real(kind = dp), dimension(:, :), pointer :: lu_abs
 
-    real(kind = dp) :: theta_x, phi_x
-
     lu_sgn => uv_fld%u_sgn
     lu_abs => uv_fld%u_abs
 
@@ -352,19 +306,20 @@ contains
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 1, size(F, 2)
       do i = 2, size(F, 1)-1
-        if (dabs(dqx(i,j)) < 1.0e-13) then
-          theta_x = sign(1.0_dp, dqx(i,j)) * 1.0e14
-        else
-          theta_x = dqx(i-lu_sgn(i,j), j)/dqx(i,j)
-        end if
-        phi_x  = phi_limiter(theta_x)
-
-        F(i,j) = F(i,j) + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) *phi_x *dqx(i,j)
-
-!         if (1.0_dp-dt*lu_abs(i,j) < 0.0_dp) then
-!           write(6, *) "Check limiter CFL conditions: "
-!           write(6, "(a,"//dp_chr//",a,"//dp_chr//",a,"//dp_chr//")") "dt = ", dt, "; lu_abs(i,j) = ", lu_abs(i,j), "; dt*lu_abs(i,j) = ", dt*lu_abs(i,j)
+!        ! Safe
+!         if (dabs(dqx(i,j)) < 1.0e-13) then
+!           theta_x = sign(1.0_dp, dqx(i,j)) * 1.0e14
+!         else
+!           theta_x = dqx(i-lu_sgn(i,j), j)/dqx(i,j)
 !         end if
+!         phi_x  = philim(theta_x)
+
+!        ! Less safe
+!         phi_x  = philim(dqx(i-lu_sgn(i,j), j)/dqx(i,j))
+!         F(i,j) = F(i,j) + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) *phi_x *dqx(i,j)
+
+        F(i,j) = F(i,j) + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) &
+                *philim(dqx(i-lu_sgn(i,j), j)/dqx(i,j)) *dqx(i,j)
       end do
     end do
 
@@ -377,15 +332,9 @@ contains
     real(kind=dp), intent(in) :: dt
 
     integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: lvp, lvm
 
     integer, dimension(:, :), pointer :: lv_sgn
     real(kind = dp), dimension(:, :), pointer :: lv_abs
-
-    real(kind = dp) :: theta_y, phi_y
-
-    lvp => uv_fld%vp
-    lvm => uv_fld%vm
 
     lv_sgn => uv_fld%v_sgn
     lv_abs => uv_fld%v_abs
@@ -394,80 +343,85 @@ contains
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 2, size(G, 2)-1
       do i = 1, size(G, 1)
-        if (dabs(dqy(i,j)) < 1.0e-13) then
-          theta_y = sign(1.0_dp, dqy(i,j)) * 1.0e14
-        else
-          theta_y = dqy(i, j-lv_sgn(i,j))/dqy(i,j)
-        end if
-        phi_y  = phi_limiter(theta_y)
-
-        G(i,j) = G(i,j) + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) *phi_y *dqy(i,j)
-
-!         if (1.0_dp-dt*lv_abs(i,j) < 0.0_dp) then
-!           write(6, *) "Check limiter CFL conditions: "
-!           write(6, "(a,"//dp_chr//",a,"//dp_chr//",a,"//dp_chr//")") "dt = ", dt, "; lv_abs(i,j) = ", lv_abs(i,j), "; dt*lv_abs(i,j) = ", dt*lv_abs(i,j)
+!        ! Safe
+!         if (dabs(dqy(i,j)) < 1.0e-13) then
+!           theta_y = sign(1.0_dp, dqy(i,j)) * 1.0e14
+!         else
+!           theta_y = dqy(i, j-lv_sgn(i,j))/dqy(i,j)
 !         end if
+!         phi_y  = philim(theta_y)
+
+!        ! Less safe
+!       phi_y  = philim(dqy(i, j-lv_sgn(i,j))/dqy(i,j))
+        G(i,j) = G(i,j) + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) &
+                *philim(dqy(i, j-lv_sgn(i,j))/dqy(i,j)) *dqy(i,j)
       end do
     end do
 
   end subroutine assemble_G_limiter
   
-  
-  subroutine assemble_F_limiter2(F, dqx, lu_abs, phi_x, dt)
+  subroutine assemble_F_LW(F, q, uv_fld, dt)
     real(kind=dp), dimension(:,:), intent(inout) :: F
-    real(kind=dp), dimension(:,:), intent(in) :: dqx, lu_abs, phi_x
+    type(field), intent(in) :: q
+    type(uv_signed), intent(in) :: uv_fld
     real(kind=dp), intent(in) :: dt
 
-    integer :: i, j
+    integer :: i, j, gl
+
+    integer, dimension(:, :), pointer :: lu_sgn
+    real(kind = dp), dimension(:, :), pointer :: lum, lup, lu_abs, lq
+
+
+    lq => q%data
+    gl = q%glayer
+    
+    lum => uv_fld%um
+    lup => uv_fld%up
+    lu_sgn => uv_fld%u_sgn
+    lu_abs => uv_fld%u_abs
 
     ! LeVeque p119
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 1, size(F, 2)
       do i = 2, size(F, 1)-1
-        F(i,j) = F(i,j) + 0.5_dp*lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j))*phi_x(i,j)*dqx(i,j)
+        F(i,j) = lum(i,j)*lq(i+gl, j+gl) + lup(i,j)*lq(i+gl-1, j+gl) &  ! Upwind
+                + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) *(lq(i+gl, j+gl)-lq(i+gl-1, j+gl))
+                ! Correction
       end do
     end do
 
-  end subroutine assemble_F_limiter2
+  end subroutine assemble_F_LW
   
-!   subroutine assemble_F_limiter3(F, q, uv_fld, dt)
-!     real(kind=dp), dimension(:,:), intent(inout) :: F
-!     type(field), intent(in) :: q
-!     type(uv_signed), intent(in) :: uv_fld
-! 
-!     real(kind=dp), intent(in) :: dt
-! 
-!     integer :: i, j
-!     
-!     lu_sgn => uv_fld%u_sgn
-!     lu_abs => uv_fld%u_abs
-! 
-!     ! LeVeque p119
-!     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
-!     do j = 1, size(F, 2)
-!       do i = 2, size(F, 1)-1
-!         F(i,j) = F(i,j) + 0.5_dp*lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j))*phi_x(i,j)*dqx(i,j)
-!       end do
-!     end do
-! 
-!   end subroutine assemble_F_limiter3
-  
-  subroutine assemble_G_limiter2(G, dqy, lv_abs, phi_y, dt)
+  subroutine assemble_G_LW(G, q, uv_fld, dt)
     real(kind=dp), dimension(:,:), intent(inout) :: G
-    real(kind=dp), dimension(:,:), intent(in) :: dqy, lv_abs, phi_y
+    type(field), intent(in) :: q
+    type(uv_signed), intent(in) :: uv_fld
     real(kind=dp), intent(in) :: dt
 
-    integer :: i, j
+    integer :: i, j, gl
+
+    integer, dimension(:, :), pointer :: lv_sgn
+    real(kind = dp), dimension(:, :), pointer :: lvm, lvp, lv_abs, lq
+    
+    lq => q%data
+    gl = q%glayer
+    
+    lvm => uv_fld%vm
+    lvp => uv_fld%vp
+    lv_sgn => uv_fld%v_sgn
+    lv_abs => uv_fld%v_abs
 
     ! LeVeque p119
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 2, size(G, 2)-1
       do i = 1, size(G, 1)
-        G(i,j) = G(i,j) + 0.5_dp*lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j))*phi_y(i,j)*dqy(i,j)
+        G(i,j) = lvm(i,j)*lq(i+gl, j+gl) + lvp(i,j)*lq(i+gl, j+gl-1) & ! Upwind
+                + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) *(lq(i+gl, j+gl)-lq(i+gl, j+gl-1))
+                ! Correction
       end do
     end do
 
-  end subroutine assemble_G_limiter2
+  end subroutine assemble_G_LW
   
   subroutine imposeBC_Kflux(K_e)
     type(K_flux), intent(inout) :: K_e
@@ -495,7 +449,16 @@ contains
 
   subroutine imposeBC_FG(F, G)
     real(kind=dp), dimension(:,:), intent(inout) :: F, G
-    integer :: i, j
+
+    ! Set flux at domain boundaries to be zero
+    call imposeBC_F(F)
+    call imposeBC_G(G)
+    
+  end subroutine imposeBC_FG
+
+  subroutine imposeBC_F(F)
+    real(kind=dp), dimension(:,:), intent(inout) :: F
+    integer :: j
 
     ! Set flux at domain boundaries to be zero
     do j = 1, size(F, 2)
@@ -503,13 +466,21 @@ contains
       F(size(F, 1),j) = 0.0_dp
     end do
 
+  end subroutine imposeBC_F
+
+  subroutine imposeBC_G(G)
+    real(kind=dp), dimension(:,:), intent(inout) :: G
+    integer :: i
+
+    ! Set flux at domain boundaries to be zero
     do i = 1, size(G, 1)
       G(i,1) = 0.0_dp
       G(i,size(G, 2)) = 0.0_dp
     end do
 
-  end subroutine imposeBC_FG
+  end subroutine imposeBC_G
 
+  
   subroutine imposeBC_q(q)
     type(field), intent(inout) :: q
     integer :: i, j, gl, m, n
@@ -570,10 +541,43 @@ contains
       end do
     end do
     
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
-
   end subroutine eval_dqdt_Kfull
+  
+    ! Consider the ghost point
+  subroutine eval_dqdt_Kfull2(dqdt, q, K11e, K12e, K21e, K22e)
+    ! 5-point stencil: ignore off diagonal terms
+    ! Assumed zero flux BC
+    type(field), intent(inout) :: dqdt
+    type(field), intent(in) :: q
+
+    real(kind=dp), dimension(:,:) :: K11e, K12e, K21e, K22e
+
+    integer :: i, j
+    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
+
+    integer :: gl   ! ghost layer
+
+    lq => q%data
+    ldqdt => dqdt%data
+
+    gl = q%glayer
+
+    ! 9points_Laplacian_FVM.mw
+    do j = 1, q%n
+      do i = 1, q%m
+        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) -( K11e(i+1,j) + K11e(i,j) + K22e(i,j+1) + K22e(i,j) ) *lq(i+gl, j+gl) &
+                    + ( K11e(i+1,j) + 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i+1+gl,j+gl) &
+                    + ( K11e(i  ,j) - 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i-1+gl,j+gl) &
+                    + ( K22e(i,j+1) + 0.25_dp*(K12e(i+1,j) - K12e(i,j)) ) *lq(i+gl,j+1+gl) &
+                    + ( K22e(i,j  ) - 0.25_dp*(K12e(i+1,j) - K12e(i,j)) ) *lq(i+gl,j-1+gl) &
+                    + ( K12e(i+1,j) + K21e(i,j+1) )* 0.25_dp *lq(i+1+gl,j+1+gl) &
+                    - ( K12e(i+1,j) + K21e(i,j  ) )* 0.25_dp *lq(i+1+gl,j-1+gl) &
+                    - ( K12e(i  ,j) + K21e(i,j+1) )* 0.25_dp *lq(i-1+gl,j+1+gl) &
+                    + ( K12e(i  ,j) + K21e(i,j  ) )* 0.25_dp *lq(i-1+gl,j-1+gl)
+      end do
+    end do
+    
+  end subroutine eval_dqdt_Kfull2
 
     ! Consider the ghost point
   subroutine eval_dqdt_FG(dqdt, q, F, G)
@@ -702,7 +706,7 @@ contains
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
     
     integer :: gl   ! ghost layer
-    real(kind = dp) :: x, y
+    real(kind = dp) :: x, y, qxy
 
     lq => q%data
     ldqdt => dqdt%data
@@ -712,7 +716,8 @@ contains
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)
         y = fld_x(j, q%n, q%type_id)
-        ldqdt(i+gl,j+gl) = lambda*(q_stat(x,y)-lq(i+gl,j+gl)) + S_rhs_stat(x,y)
+        qxy = lq(i+gl,j+gl)
+        ldqdt(i+gl,j+gl) = S_rhs_stat(x,y, qxy, lambda)
       end do
     end do
     
@@ -839,6 +844,47 @@ contains
 
   end subroutine timestep_heun_Kflux
   
+  subroutine timestep_heun2_Kflux(q, dt, K_e)
+    ! Heun's method
+    type(field), intent(inout) :: q
+    type(K_flux), intent(in) :: K_e
+
+    real(kind = dp), intent(in) :: dt
+
+    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
+
+    type(field) :: dqdt
+    type(field) :: qc
+
+    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+    call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
+
+    K11e => K_e%K11e
+    K12e => K_e%K12e
+    K21e => K_e%K21e
+    K22e => K_e%K22e
+
+    ! Evaluate dqdt and copy q to qc
+    call zeros(dqdt)
+    call eval_dqdt_Kfull2(dqdt, q, K11e, K12e, K21e, K22e)
+    call set(qc, q)
+
+    ! Prediction step
+    call timestep_fe(qc, dqdt, dt)
+    call imposeBC(qc)
+
+    ! Correction step (add to dqdt, not rewriting it)
+    call eval_dqdt_Kfull2(dqdt, qc, K11e, K12e, K21e, K22e)
+    
+    ! Full timestepPing
+    call timestep_fe(q, dqdt, 0.5_dp*dt)
+    call imposeBC(q)
+
+    call deallocate(dqdt)
+    call deallocate(qc)
+
+  end subroutine timestep_heun2_Kflux
+  
   subroutine timestep_fe_Kflux(q, dt, K_e)
     ! Heun's method
     type(field), intent(inout) :: q
@@ -869,7 +915,6 @@ contains
   
   
   subroutine eval_dqdt_Kfull_scr_stat(dqdt, q, K11e, K12e, K21e, K22e, lambda)
-    ! Heun's method
     type(field), intent(inout) :: dqdt, q
     real(kind = dp), dimension(:,:), intent(in) :: K11e, K12e, K21e, K22e
 
@@ -892,7 +937,6 @@ contains
   end subroutine eval_dqdt_Kfull_scr_stat
   
   subroutine eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
-    ! Heun's method
     type(field), intent(inout) :: dqdt, q
     real(kind = dp), dimension(:,:), intent(in) :: K11e, K12e, K21e, K22e
 
@@ -1039,9 +1083,9 @@ contains
     K22e => K_e%K22e
 
     ! Evaluate dqdt and copy q to qc
+    call set(qc, q)
     call zeros(dqdt)
     call eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
-    call set(qc, q)
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
@@ -1049,7 +1093,7 @@ contains
 
     ! Correction step
     call zeros(dqdtc)
-    call eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
+    call eval_dqdt_Kfull_scr_nonstat(dqdtc, qc, t+dt, K11e, K12e, K21e, K22e)
     call addto(dqdt, dqdtc, 1.0_dp)
 
     ! Full timestepPing
@@ -1135,27 +1179,18 @@ contains
     
     call imposeBC(F, G)
     call eval_dqdt(dqdt, q, F, G)
+    
     call timestep_fe(q, dqdt, 0.5_dp*dt)
     call imposeBC(q)
 
     F = 0.0_dp
     call dy_field(dqy, q)
     call assemble_G_DCU(G, q, uv_fld)
-    call assemble_G_limiter(G, dqy, uv_fld, 0.5_dp*dt)  ! Apply limiter
+    call assemble_G_limiter(G, dqy, uv_fld, dt)  ! Apply limiter
     
     call imposeBC(F, G)
     call eval_dqdt(dqdt, q, F, G)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
-
-    F = 0.0_dp
-    call dy_field(dqy, q)
-    call assemble_G_DCU(G, q, uv_fld)
-    call assemble_G_limiter(G, dqy, uv_fld, 0.5_dp*dt)  ! Apply limiter
-    
-    call imposeBC(F, G)
-    call eval_dqdt(dqdt, q, F, G)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
+    call timestep_fe(q, dqdt, dt)
     call imposeBC(q)
 
     G = 0.0_dp
@@ -1183,13 +1218,9 @@ contains
     type(uv_signed), intent(in) :: uv_fld
 
     real(kind = dp), intent(in) :: dt
-    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy, phi_x, phi_y
+    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
 
     type(field) :: dqdt
-    
-    if (q%glayer .ne. 1) then
-      call abort_handle("ghost layer not equal 1", __FILE__, __LINE__)
-    end if
     
     call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
 
@@ -1197,69 +1228,179 @@ contains
     allocate(G(q%m, q%n+1))
     allocate(dqx(q%m+1, q%n))
     allocate(dqy(q%m, q%n+1))
-!     allocate(phi_x(q%m+1, q%n))
-!     allocate(phi_y(q%m, q%n+1))
 
     ! F, G at boundaries will not be touched
     F = 0.0_dp
     G = 0.0_dp
 
-    ! Strang splitting: x, y direction - XYYX
+    ! Strang splitting: x, y direction - XYX
     ! X
     call assemble_F_DCU2(F, q, uv_fld%up, uv_fld%um)
     call dx_field(dqx, q)
-!     call assemble_phi_x(phi_x, dqx, uv_fld%u_sgn)
-!     call assemble_F_limiter2(F, dqx, uv_fld%u_abs, phi_x, 0.5_dp*dt)  ! Apply limiter
     call assemble_F_limiter(F, dqx, uv_fld, 0.5_dp*dt)  ! Apply limiter
     
     call eval_dqdt_F(dqdt, q, F)
     call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
 
     ! Y
     call assemble_G_DCU2(G, q, uv_fld%vp, uv_fld%vm)
     call dy_field(dqy, q)
-!     call assemble_phi_y(phi_y, dqy, uv_fld%v_sgn)
-!     call assemble_G_limiter2(G, dqy, uv_fld%v_abs, phi_y, 0.5_dp*dt)  ! Apply limiter 
-    call assemble_G_limiter(G, dqy, uv_fld, 0.5_dp*dt)  ! Apply limiter
+    call assemble_G_limiter(G, dqy, uv_fld, dt)  ! Apply limiter
 
     call eval_dqdt_G(dqdt, q, G)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
-
-    ! Y
-    call assemble_G_DCU2(G, q, uv_fld%vp, uv_fld%vm)
-    call dy_field(dqy, q)
-!     call assemble_phi_y(phi_y, dqy, uv_fld%v_sgn)
-!     call assemble_G_limiter2(G, dqy, uv_fld%v_abs, phi_y, 0.5_dp*dt)  ! Apply limiter 
-    call assemble_G_limiter(G, dqy, uv_fld, 0.5_dp*dt)  ! Apply limiter
-
-    call eval_dqdt_G(dqdt, q, G)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
+    call timestep_fe(q, dqdt, dt)
     
     ! X
     call assemble_F_DCU2(F, q, uv_fld%up, uv_fld%um)
     call dx_field(dqx, q)
-!     call assemble_phi_x(phi_x, dqx, uv_fld%u_sgn)
-!     call assemble_F_limiter2(F, dqx, uv_fld%u_abs, phi_x, 0.5_dp*dt)  ! Apply limiter
     call assemble_F_limiter(F, dqx, uv_fld, 0.5_dp*dt)  ! Apply limiter
     
     call eval_dqdt_F(dqdt, q, F)
     call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
 
     ! Deallocate
     call deallocate(dqdt)
 
     deallocate(dqx)
     deallocate(dqy)
-!     deallocate(phi_x)
-!     deallocate(phi_y)
     deallocate(F)
     deallocate(G)
 
   end subroutine timestep_LMT_1DS2
+  
+  subroutine timestep_LMT_1DS3(q, dt, uv_fld)
+    type(field), intent(inout) :: q
+    type(uv_signed), intent(in) :: uv_fld
+
+    real(kind = dp), intent(in) :: dt
+    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
+
+    type(field) :: dqdt
+    
+    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+
+    allocate(F(q%m+1, q%n))
+    allocate(G(q%m, q%n+1))
+    allocate(dqx(q%m+1, q%n))
+    allocate(dqy(q%m, q%n+1))
+
+    ! F, G at boundaries will not be touched
+    F = 0.0_dp
+    G = 0.0_dp
+
+    ! Strang splitting: x, y direction - XYX
+    ! X
+    call assemble_F_DCU2(F, q, uv_fld%up, uv_fld%um)
+    call dx_field(dqx, q)
+    call assemble_F_limiter(F, dqx, uv_fld, dt)  ! Apply limiter
+    
+    call eval_dqdt_F(dqdt, q, F)
+    call timestep_fe(q, dqdt, dt)
+
+    ! Y
+    call assemble_G_DCU2(G, q, uv_fld%vp, uv_fld%vm)
+    call dy_field(dqy, q)
+    call assemble_G_limiter(G, dqy, uv_fld, dt)  ! Apply limiter
+
+    call eval_dqdt_G(dqdt, q, G)
+    call timestep_fe(q, dqdt, dt)
+
+    ! Deallocate
+    call deallocate(dqdt)
+
+    deallocate(dqx)
+    deallocate(dqy)
+    deallocate(F)
+    deallocate(G)
+
+  end subroutine timestep_LMT_1DS3
+  
+  subroutine timestep_LaxWendoff(q, dt, uv_fld)
+    type(field), intent(inout) :: q
+    type(uv_signed), intent(in) :: uv_fld
+
+    real(kind = dp), intent(in) :: dt
+    real(kind=dp), dimension(:,:), allocatable :: F, G
+
+    type(field) :: dqdt
+    
+    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+
+    allocate(F(q%m+1, q%n))
+    allocate(G(q%m, q%n+1))
+
+    ! F, G at boundaries will not be touched
+    F = 0.0_dp
+    G = 0.0_dp
+
+    ! Strang splitting: x, y direction - XYX
+    ! X
+    call assemble_F_LW(F, q, uv_fld, 0.5_dp*dt)  ! LaxWendoff
+    
+    call eval_dqdt_F(dqdt, q, F)
+    call timestep_fe(q, dqdt, 0.5_dp*dt)
+
+    ! Y
+    call assemble_G_LW(G, q, uv_fld, dt)  ! LaxWendoff
+
+    call eval_dqdt_G(dqdt, q, G)
+    call timestep_fe(q, dqdt, dt)
+    
+    ! X
+    call assemble_F_LW(F, q, uv_fld, 0.5_dp*dt)  ! LaxWendoff
+    
+    call eval_dqdt_F(dqdt, q, F)
+    call timestep_fe(q, dqdt, 0.5_dp*dt)
+
+    ! Deallocate
+    call deallocate(dqdt)
+
+    deallocate(F)
+    deallocate(G)
+
+  end subroutine timestep_LaxWendoff
+  
+  subroutine timestep_LMT_2D(q, dt, uv_fld)
+    type(field), intent(inout) :: q
+    type(uv_signed), intent(in) :: uv_fld
+
+    real(kind = dp), intent(in) :: dt
+    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
+
+    type(field) :: dqdt
+    
+    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+
+    allocate(F(q%m+1, q%n))
+    allocate(G(q%m, q%n+1))
+    allocate(dqx(q%m+1, q%n))
+    allocate(dqy(q%m, q%n+1))
+
+    ! F, G at boundaries will not be touched
+    F = 0.0_dp
+    G = 0.0_dp
+
+    call assemble_F_DCU2(F, q, uv_fld%up, uv_fld%um)
+    call dx_field(dqx, q)
+    call assemble_F_limiter(F, dqx, uv_fld, dt)  ! Apply limiter
+
+    call assemble_G_DCU2(G, q, uv_fld%vp, uv_fld%vm)
+    call dy_field(dqy, q)
+    call assemble_G_limiter(G, dqy, uv_fld, dt)  ! Apply limiter
+
+    call eval_dqdt(dqdt, q, F, G)
+    call timestep_fe(q, dqdt, dt)
+
+    ! Deallocate
+    call deallocate(dqdt)
+
+    deallocate(dqx)
+    deallocate(dqy)
+    deallocate(F)
+    deallocate(G)
+
+  end subroutine timestep_LMT_2D
+  
 
   subroutine print_info_timestepPing(psi, dt)
     type(field), intent(in) :: psi
@@ -1319,10 +1460,8 @@ contains
 
     dt = T/nts
     do i = 1, nts
-      ! Strang splitting
-      call timestep_fe_Kflux(q, 0.5_dp*dt, K_e)
-      call timestep_LMT(q, dt, uv_fld)
-      call timestep_fe_Kflux(q, 0.5_dp*dt, K_e)
+      call timestep_heun2_Kflux(q, dt, K_e)
+      call timestep_LMT_2D(q, dt, uv_fld)
     end do
 
     call stop(timestep_timer)

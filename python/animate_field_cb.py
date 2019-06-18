@@ -28,7 +28,7 @@ Y_frames = []
 factor = 1
 nframes = 50
 i_final = 2**12
-i_final = 4096
+i_final = 1024
 
 
 #for ts in range(1, 3200*factor+1, 3200*factor/nframes):
@@ -85,8 +85,8 @@ def animate(i):
     #q_e = (X_e*(1.0-Y_e))**2 * (Y_e*(1.0-X_e))**3
     #q_e = (numpy.sin(2.0*numpy.pi*X_e) * numpy.sin(numpy.pi*Y_e))**2
 
-    cf_r = axarr[1].pcolormesh(X, Y, q_e-arr, norm=norm)
-    cf_r = axarr[1].pcolormesh(X, Y, q_e-arr)
+    cf_r = axarr[1].pcolormesh(X, Y, q_e, norm=norm)
+    #cf_r = axarr[1].pcolormesh(X, Y, q_e-arr)
 
     dx = x_e[1]-x_e[0]
     dy = y_e[1]-y_e[0]

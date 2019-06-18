@@ -248,21 +248,29 @@ contains
     ! maxmin u and v wrt 0
     do j = 1, size(lup, 2)
       do i = 1, size(lup, 1)
-        lu_sgn(i,j) = int(sign(1.0_dp, lup(i,j)))
-        lu_abs(i,j) = dabs(lup(i,j))
+        if (dabs(lup(i,j)) > 1e-14) then
+          lu_sgn(i,j) = int(sign(1.0_dp, lup(i,j)))
+        else
+          lu_sgn(i,j) = 0
+        end if
 
         lum(i,j) = min(lup(i, j), 0.0_dp)
         lup(i,j) = max(lup(i, j), 0.0_dp)
+        lu_abs(i,j) = lup(i,j) - lum(i,j)
       end do
     end do
 
     do j = 1, size(lvp, 2)
       do i = 1, size(lvp, 1)
-        lv_sgn(i,j) = int(sign(1.0_dp, lvp(i,j)))
-        lv_abs(i,j) = dabs(lvp(i,j))
+        if (dabs(lvp(i,j)) > 1e-14) then
+          lv_sgn(i,j) = int(sign(1.0_dp, lvp(i,j)))
+        else
+          lv_sgn(i,j) = 0
+        end if
 
         lvm(i,j) = min(lvp(i, j), 0.0_dp)
         lvp(i,j) = max(lvp(i, j), 0.0_dp)
+        lv_abs(i,j) = lvp(i,j) - lvm(i,j)
       end do
     end do
 
@@ -606,12 +614,20 @@ contains
     do j = 1, psi_fld%n
       do i = 1, psi_fld%m+1
         u(i, j) = lpsi_fld(i, j) - lpsi_fld(i, j+1)
+        
+        if (dabs(u(i, j)) < 1e-14) then
+          u(i, j) = 0.0_dp
+        end if
       end do
     end do
 
     do j = 1, psi_fld%n+1
       do i = 1, psi_fld%m
         v(i, j) = lpsi_fld(i+1, j) - lpsi_fld(i, j)
+        
+        if (dabs(v(i, j)) < 1e-14) then
+          v(i, j) = 0.0_dp
+        end if
       end do
     end do
 
@@ -628,14 +644,14 @@ contains
     lfld => fld%data
     gl = fld%glayer
 
-    ! Dimension check, assumed ghost layer exist
-    if ((size(d_fld,1) .ne. fld%m+1) .or. (size(d_fld,2) .ne. fld%n)) then
-      call abort_handle("dx_field: Invalid size", __FILE__, __LINE__)
-    end if
-
-    if (gl .le. 0) then
-      call abort_handle("dx_field: Need to impose ghost layer", __FILE__, __LINE__)
-    end if
+!     ! Dimension check, assumed ghost layer exist
+!     if ((size(d_fld,1) .ne. fld%m+1) .or. (size(d_fld,2) .ne. fld%n)) then
+!       call abort_handle("dx_field: Invalid size", __FILE__, __LINE__)
+!     end if
+! 
+!     if (gl .le. 0) then
+!       call abort_handle("dx_field: Need to impose ghost layer", __FILE__, __LINE__)
+!     end if
 
     do j = 1, fld%n
       do i = 1, (fld%m+1)
@@ -655,14 +671,14 @@ contains
     lfld => fld%data
     gl = fld%glayer
 
-    ! Dimension check
-    if ((size(d_fld,1) .ne. fld%m) .or. (size(d_fld,2) .ne. fld%n+1)) then
-      call abort_handle("dy_field: Invalid size", __FILE__, __LINE__)
-    end if
-
-    if (gl .le. 0) then
-      call abort_handle("dy_field: Need to impose ghost layer", __FILE__, __LINE__)
-    end if
+!     ! Dimension check
+!     if ((size(d_fld,1) .ne. fld%m) .or. (size(d_fld,2) .ne. fld%n+1)) then
+!       call abort_handle("dy_field: Invalid size", __FILE__, __LINE__)
+!     end if
+! 
+!     if (gl .le. 0) then
+!       call abort_handle("dy_field: Need to impose ghost layer", __FILE__, __LINE__)
+!     end if
 
     do j = 1, (fld%n+1)
       do i = 1, fld%m
@@ -676,7 +692,7 @@ contains
     type(field), intent(out) :: fld
     integer, intent(in) :: param
     integer :: i, j
-    real(kind = dp) :: im, jm
+    real(kind = dp) :: im, jm, x, y
 
     real(kind = dp), dimension(:, :), pointer :: lfld
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
@@ -708,6 +724,11 @@ contains
             im = (fld%m+1+fld%type_id)*0.5_dp
             jm = (fld%n+1+fld%type_id)*0.5_dp
             lfld(i, j) = 0.5_dp*( (i-im)*(i-im) + (j-jm)*(j-jm))
+        elseif (param .eq. 7) then
+            ! TG
+            x = fld_x(i, fld%m, fld%type_id)  ! in [0, 1]
+            y = fld_x(j, fld%n, fld%type_id)  ! in [0, 1]
+            fld%data(i, j) = fld%m*fld%n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
         end if
       end do
     end do
@@ -855,12 +876,13 @@ contains
     
     S_rhs_nonstat = dqt + udqx + vdqy - divKgradq
     !S_rhs_nonstat = dqt - divKgradq
-
+    !S_rhs_nonstat = dqt + udqx + vdqy
+    
   end function S_rhs_nonstat
   
-  pure real(kind=dp) function S_rhs_stat(x, y)
+  pure real(kind=dp) function S_rhs_stat(x, y, qxy, lambda)
     ! Define on [0, 1] times [0, 1]
-    real(kind = dp), intent(in) :: x, y
+    real(kind = dp), intent(in) :: x, y, qxy, lambda
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
     
     real(kind = dp) :: dqt, udqx, vdqy, divKgradq
@@ -879,8 +901,10 @@ contains
                 -8.0_dp*y**2*(1.0_dp/5.0_dp)+8.0_dp*y*(1.0_dp/5.0_dp))*(x-1.0_dp)*x*Pi))/(-256.0_dp*Pi*Pi)
     
     
-    S_rhs_stat = dqt + udqx + vdqy - divKgradq
-
+!     S_rhs_stat = dqt + udqx + vdqy - divKgradq
+    S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt + udqx + vdqy - divKgradq
+!     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt - divKgradq
+!     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt + udqx + vdqy
   end function S_rhs_stat
 
   pure real(kind=dp) function fld_x(i, m, type_id)
