@@ -21,6 +21,8 @@ module advdiff_inference
     integer :: m, n
     integer :: ndof
     type(field) :: psi, K11, K22, K12
+    integer :: occurrence
+    real(kind=dp) :: SlogPost
   end type dofdat
   
   type IndFndat
@@ -81,6 +83,9 @@ contains
     call allocate(dof%K22, m, n, 'K22', glayer=0, type_id=type_id)
     call allocate(dof%K12, m, n, 'K12', glayer=0, type_id=type_id)
 
+    dof%occurrence = 0
+    dof%SlogPost = 0.0_dp
+    
   end subroutine allocate_dof
 
   subroutine deallocate_dof(dof)
@@ -208,6 +213,50 @@ contains
     end do
 
   end subroutine evaluate_loglik_IND
+  
+  subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
+    real(kind=dp), dimension(:), intent(out) :: loglik
+    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(IndFndat), intent(in) :: IndFn
+    type(meshdat), intent(in) :: mesh
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), intent(in) :: h
+    integer, intent(in) :: nts
+
+    integer :: INDk
+
+    !! Control number of thread by "num_threads(32)" after "DO"
+    !$OMP PARALLEL DO
+    do INDk = 1, IndFn%nIND
+      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
+    end do
+    !$OMP END PARALLEL DO
+    
+  end subroutine evaluate_loglik_OMP
+  
+  real(kind=dp) function evaluate_Sloglik_OMP(jumps, IndFn, mesh, dof, h, nts)
+    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(IndFndat), intent(in) :: IndFn
+    type(meshdat), intent(in) :: mesh
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), intent(in) :: h
+    integer, intent(in) :: nts
+
+    real(kind=dp) :: Sloglik
+
+    integer :: INDk
+
+    Sloglik = 0.0_dp
+    
+    !$OMP PARALLEL DO REDUCTION(+:Sloglik) num_threads(32)
+    do INDk = 1, IndFn%nIND
+      Sloglik = Sloglik + eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
+    end do
+    !$OMP END PARALLEL DO
+    
+    evaluate_Sloglik_OMP = Sloglik
+    
+  end function evaluate_Sloglik_OMP
   
   subroutine INDk_to_klist(klist, INDk, IndFn, mesh)
     integer, dimension(:), allocatable, intent(out) :: klist
@@ -367,6 +416,27 @@ contains
     end if
     
   end subroutine propose_dof
+  
+  subroutine propose_dof_all(dof, iter, dof_SSD)
+    type(dofdat), intent(inout) :: dof
+    integer, intent(in) :: iter
+    type(dofdat), intent(in) :: dof_SSD
+
+    integer :: dof_id
+    
+    !write(6, *) "propose_dof: Proposing two changes at a time"
+    if (mod(iter, 2) .eq. 0) then
+      do dof_id = 1, dof%ndof
+        call propose_dof_K(dof, dof_id, dof_SSD)
+      end do
+    else
+      do dof_id = 1, dof%ndof
+        call propose_dof_psi(dof, dof_id, dof_SSD)
+        call imposeBC_cornerpsi(dof)
+      end do
+    end if
+  
+  end subroutine propose_dof_all
 
   subroutine propose_dof_K(dof, dof_id, dof_SSD)
     type(dofdat), intent(inout) :: dof

@@ -3,7 +3,8 @@ clear all
 m = [];
 error = [];
 
-
+% Adaptive Markov Chain Monte Carlo: Theory and Method Atchad
+% An Adaptive Metropolis Algorit Haario
 %% dt = C dx
 % Lax-Wendoff (temporal_error_LaxWendoff_dx.txt)
 nts(           1 ) =        2048 ; error(           1 ) =    2.3354105808755108E-002
@@ -60,6 +61,8 @@ error_SB = error;
 
 nts_LW2 = nts;
 error_LW2 = error;
+
+
 
 %%
 % addpath('/home/s1046972/opt/Bayesian_SDE_Inference/Two_Dimensional/data_visualisation_nonkernel/scripts')

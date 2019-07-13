@@ -28,7 +28,7 @@ module advdiff_io
   end interface write
 
   type(timer), save :: write_field_timer
-  public :: reset_io_timers, print_io_timers
+  public :: reset_io_timers, print_io_timers, write_theta
 
 contains
 
@@ -288,6 +288,7 @@ contains
 
   end subroutine write_dof
   
+  
   subroutine read_dof(dof, filename, sc, index)
     type(dofdat), intent(inout) :: dof
     character(len = *), intent(in) :: filename
@@ -322,6 +323,8 @@ contains
     dof%m = dof%psi%m
     dof%n = dof%psi%n
     dof%ndof = dof%m * dof%n
+    dof%SlogPost = SlogPost
+    dof%occurrence = 1
 
     ! Rescale to computation domain
     call scale(dof%psi, sc)
@@ -330,6 +333,120 @@ contains
     call scale(dof%K12, sc)
     
   end subroutine read_dof
+
+  subroutine allocate_theta(theta, dof)
+    real(kind=dp), dimension(:), allocatable, intent(out) :: theta
+    type(dofdat), intent(in) :: dof
+    
+    integer :: theta_len
+    
+    theta_len = 0
+    theta_len = theta_len + size(dof%psi%data,1)*size(dof%psi%data,2)
+    theta_len = theta_len + size(dof%K11%data,1)*size(dof%K11%data,2)
+    theta_len = theta_len + size(dof%K22%data,1)*size(dof%K22%data,2)
+    theta_len = theta_len + size(dof%K12%data,1)*size(dof%K12%data,2)
+    
+    allocate(theta(theta_len))
+
+  end subroutine allocate_theta
+  
+  subroutine convert_dof_to_theta(theta, dof, sc)
+    real(kind=dp), dimension(:), intent(out) :: theta
+    type(dofdat), intent(in) :: dof
+    real(kind = dp), optional, intent(in) :: sc
+
+    real(kind = dp) :: rsc
+    integer :: i, j, k
+    
+    if (present(sc)) then
+      rsc = 1.0_dp/sc
+    else
+      rsc = 1.0_dp
+    end if
+    
+    k = 0
+    ! Psi
+    do j = 1, size(dof%psi%data, 2)
+      do i = 1, size(dof%psi%data, 1)
+        k = k + 1
+        theta(k) = dof%psi%data(i, j) *rsc
+      end do
+    end do
+    ! K11
+    do j = 1, size(dof%K11%data, 2)
+      do i = 1, size(dof%K11%data, 1)
+        k = k + 1
+        theta(k) = dof%K11%data(i, j) *rsc
+      end do
+    end do
+    ! K22
+    do j = 1, size(dof%K22%data, 2)
+      do i = 1, size(dof%K22%data, 1)
+        k = k + 1
+        theta(k) = dof%K22%data(i, j) *rsc
+      end do
+    end do
+    ! K12
+    do j = 1, size(dof%K12%data, 2)
+      do i = 1, size(dof%K12%data, 1)
+        k = k + 1
+        theta(k) = dof%K12%data(i, j) *rsc
+      end do
+    end do
+
+  end subroutine convert_dof_to_theta
+  
+  subroutine write_theta(dof, filename, sc, index)
+    type(dofdat), intent(in) :: dof
+    character(len = *), intent(in) :: filename
+    real(kind=dp), optional, intent(in) :: sc
+    integer, optional, intent(in) :: index
+    
+    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    real(kind=dp), dimension(:), allocatable :: theta
+    
+    call start(write_field_timer)
+
+    call allocate_theta(theta, dof)
+    
+    if (present(sc)) then
+      call convert_dof_to_theta(theta, dof, sc)
+    else
+      call convert_dof_to_theta(theta, dof)
+    end if
+    
+    if(present(index)) then
+      write(lfilename, "(a,a,i0)") trim(filename), "_", index
+    else
+      lfilename = trim(filename)
+    end if
+
+    open(unit = output_unit, file = trim(lfilename) // ".hdr", &
+      & status = "replace", action = "write")
+    write(output_unit, "(a)") "theta -- psi, K11, K22, K12 (m, n, type_id: 0center, 1corner) logPost, occurrence"
+    write(output_unit, "(i0)") 4
+    write(output_unit, "(i0,a,i0,a,i0)") size(dof%psi%data, 1), " ", &
+                      size(dof%psi%data, 2), " ", dof%psi%type_id
+    write(output_unit, "(i0,a,i0,a,i0)") size(dof%K11%data, 1), " ", &
+                      size(dof%K11%data, 2), " ", dof%K11%type_id
+    write(output_unit, "(i0,a,i0,a,i0)") size(dof%K22%data, 1), " ", &
+                      size(dof%K22%data, 2), " ", dof%K22%type_id
+    write(output_unit, "(i0,a,i0,a,i0)") size(dof%K12%data, 1), " ", &
+                      size(dof%K12%data, 2), " ", dof%K12%type_id
+    write(output_unit, "("//dp_chr//")") dof%SlogPost
+    write(output_unit, "(i0)") dof%occurrence
+    close(output_unit)
+
+    open(unit = output_unit, file = trim(lfilename) // ".dat", &
+      & status = "replace", access = "stream", action = "write")
+    write(output_unit) theta
+    close(output_unit)
+
+    call stop(write_field_timer)
+    
+    deallocate(theta)
+    
+  end subroutine write_theta
 
   subroutine reset_io_timers()
     call reset(write_field_timer)

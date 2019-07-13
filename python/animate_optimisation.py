@@ -1,7 +1,6 @@
 import sys
 
-show_id = 50
-show_id = 50
+show_id = 20
 #data_folder = './output/output16/K_TG_iso/'
 #data_folder = './output/output16_ptwiseprop/K_TG_iso/'
 data_folder = './output/output16/K_sinusoidal/'
@@ -22,11 +21,12 @@ data_folder = './output/output16/TTG_sinusoidal/'
 #data_folder = './output/output16/K_sinusoidal/'
 #data_folder = './output/output16/K_sinusoidal_wor/'
 #data_folder = './output/output16/K_sinusoidal_wM/'
-data_folder = './output/output32/QGM2_L1_NPART676/'
+#data_folder = './output/output32/QGM2_L1_NPART676/'
 #data_folder = './output/output16/QGM2_L1_NPART676_iso/'
 #data_folder = './output/output16/QGM2_L1_NPART676/'
 #data_folder = './output/output16/QGM2_L1_NPART2704_iso/h64d/'
 #data_folder = './output/output48/QGM2_L1_NPART2704_iso/h64d/'
+data_folder = './output/N4096_D256_I256/QGM2_L1_NPART2704/h64d/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import numpy
@@ -43,7 +43,7 @@ import field_io
 
 def visualise_field(ax, field_in, ts, max_level, resc_unit):
   pcolor1contour0 = 1
-  levels = MaxNLocator(nbins=15).tick_values(-1.25*max_level/resc_unit, 1.25*max_level/resc_unit)
+  levels = MaxNLocator(nbins=15).tick_values(-1.0*max_level/resc_unit, 1.0*max_level/resc_unit)
   #cmap = plt.get_cmap('Reds')
   cmap = plt.get_cmap('bwr')
   norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
@@ -81,15 +81,18 @@ def visualise_field(ax, field_in, ts, max_level, resc_unit):
       pcm = ax.contourf(X, Y, (numpy.transpose(arr))/resc_unit, cmap=cmap, levels=levels)
 
   ax.set_title(field_in + ': logPost = ' + str(tt))
+  #ax.set_title(r'$\'+field_in+'$')
   ax.set_title(field_in)
   ax.set_xlim(xl[0], xl[-1])
   ax.set_ylim(yl[0], yl[-1])
   ax.set_aspect('equal')
+  plt.axis('off')
   plt.colorbar(pcm, ax=ax)
+  tight_layout()
 
-  theo_logLik = -386479.35214807594
-  init_logLik = -395073.95702572557
-  print('initial = ', init_logLik, 'Exact = ', theo_logLik, 'MAP = ', tt)
+  # theo_logLik = -386479.35214807594
+  # init_logLik = -395073.95702572557
+  # print('initial = ', init_logLik, 'Exact = ', theo_logLik, 'MAP = ', tt)
 
 def animate_full(ts):
   # Upper left panel: Exact solution

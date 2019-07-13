@@ -517,19 +517,20 @@ contains
     real(kind=dp), dimension(:,:) :: K11e, K12e, K21e, K22e
 
     integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
+    !real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
+    real(kind = dp), dimension(:, :), pointer :: lq
 
     integer :: gl   ! ghost layer
 
     lq => q%data
-    ldqdt => dqdt%data
+    !ldqdt => dqdt%data
 
     gl = q%glayer
 
     ! 9points_Laplacian_FVM.mw
     do j = 1, q%n
       do i = 1, q%m
-        ldqdt(i+gl,j+gl) = -( K11e(i+1,j) + K11e(i,j) + K22e(i,j+1) + K22e(i,j) ) *lq(i+gl, j+gl) &
+        dqdt%data(i+gl,j+gl) = -( K11e(i+1,j) + K11e(i,j) + K22e(i,j+1) + K22e(i,j) ) *lq(i+gl, j+gl) &
                     + ( K11e(i+1,j) + 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i+1+gl,j+gl) &
                     + ( K11e(i  ,j) - 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i-1+gl,j+gl) &
                     + ( K22e(i,j+1) + 0.25_dp*(K12e(i+1,j) - K12e(i,j)) ) *lq(i+gl,j+1+gl) &

@@ -8,7 +8,7 @@ default: advdiff
 OBJS = $(filter-out src/advdiff.o, $(addsuffix .o, $(basename $(wildcard src/*.F90))))
 
 advdiff: objs
-	$(FC) $(OBJS) src/advdiff.o -o $@ $(LDFLAGS)
+	$(FC) $(FCFLAGS) $(OBJS) src/advdiff.o -o $@ $(LDFLAGS)
 
 objs:
 	make -C src
