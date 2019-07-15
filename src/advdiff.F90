@@ -790,39 +790,224 @@ contains
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
   
-    integer, parameter :: M = 4
-    integer, parameter :: N = 4
+    integer, parameter :: M = 8
+    integer, parameter :: N = 16
     real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
     
     type(C_PTR) :: plan
-    real(C_DOUBLE), dimension(:, :) :: in
-    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: out
+    real(kind=dp), dimension(:, :), allocatable :: data_in, data_intpl, data_exact
+    real(C_DOUBLE), dimension(:, :), allocatable :: in
+    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: out, out_b, out_intpl
     
-    integer :: i, j
+    integer :: i, j, scx, scy, dj
     real(kind=dp) :: x, y
     
-    allocate(in(M, N))
-    allocate(out(M, N))
+    allocate(data_in(M, N))
     
-    do j = 1, size(in, 2)
-      do i = 1, size(in, 1)
+    do j = 1, size(data_in, 2)
+      do i = 1, size(data_in, 1)
         x = real(i-1, kind=dp)/real(M, kind=dp)
         y = real(j-1, kind=dp)/real(N, kind=dp)
         
-        in(i, j) = (x + y**2)*dsin(Pi*x)*dsin(Pi*y)
-        
+        data_in(i, j) = (x + y**2)*dsin(Pi*x)*dsin(2.0_dp*Pi*y)
+        data_in(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
       end do
     end do
     
-    plan = fftw_plan_dft_2d(M,N, in,out, FFTW_FORWARD,FFTW_ESTIMATE)
-    call fftw_execute_dft(plan, in, out)
-    write(6, *) out(1,1)
+!     call print_array(data_in, "Ze")
+    
+    allocate(in(M, N))
+    allocate(out(M/2+1, N))
+    allocate(out_b(M/2+1, N))
+    
+    do j = 1, size(in, 2)
+      do i = 1, size(in, 1)
+        in(i, j) = data_in(i, j)
+      end do
+    end do
+    
+    ! Test 1: Forward and Backward FFT
+    plan = fftw_plan_dft_r2c_2d(N,M, in,out, FFTW_ESTIMATE)
+    call fftw_execute_dft_r2c(plan, in, out)
+    call fftw_destroy_plan(plan)
+
+!     call print_array(real(out), "Zk_real")
+!     call print_array(IMAG(out), "Zk_imag")
+    
+    out_b = out
+    
+    plan = fftw_plan_dft_c2r_2d(N,M, out, in, FFTW_ESTIMATE)
+    call fftw_execute_dft_c2r(plan, out, in)
+    in = in/real(M*N, kind=dp)
+
     call fftw_destroy_plan(plan)
     
+    if (.not. iszero(data_in-in)) then
+      call abort_handle(" ! FAIL  @ Inconsistent forward and backward FFT", __FILE__, __LINE__)
+    end if
+    
+    ! Test 2: Interpolation
+    scx = 3
+    scy = 5
+    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
+    allocate(out_intpl(size(data_intpl,1)/2+1, size(data_intpl,2)))
+    
+    
+    out_intpl = 0.0_dp
+    
+    ! Zero padding along row
+    do j = 1, size(out_b, 2)
+      do i = 1, size(out_b, 1)
+        out_intpl(i, j) = out_b(i,j)
+      end do
+    end do
+    
+    ! Halve the N/2+1 term
+    i = size(out_b, 1)
+    do j = 1, size(out_b, 2)
+      out_intpl(i, j) = 0.5_dp*out_intpl(i, j)
+    end do
+    
+    
+    ! Shift along column
+    do j = (size(out_b, 2)/2+2), size(out_b, 2)
+      do i = 1, size(out_intpl, 1)-1
+        out_intpl(i, j+(scy-1)*size(out_b, 2)) = out_intpl(i, j)
+        out_intpl(i, j) = 0.0_dp
+      end do
+    end do
+
+    ! Halve the N/2+1 term
+    j = size(out_b, 2)/2 + 1
+    do i = 1, size(out_b, 1)
+      out_intpl(i, j+(scy-1)*size(out_b, 2)) = 0.5_dp*out_intpl(i, j)
+      out_intpl(i, j) = 0.5_dp*out_intpl(i, j)
+    end do
+    
+!     call print_array(real(out_intpl), "Zk_pad2_re")
+!     call print_array(IMAG(out_intpl), "Zk_pad2_im")
+    
+    
+    plan = fftw_plan_dft_c2r_2d(size(data_intpl,2),size(data_intpl,1), out_intpl, data_intpl, FFTW_ESTIMATE)
+    call fftw_execute_dft_c2r(plan, out_intpl, data_intpl)
+    
+    data_intpl = data_intpl/real(size(data_in,1)*size(data_in,2),kind=dp)
+    
+!     call print_array(data_intpl, "data_intpl")
+
+    ! Validate the exact recovery
+    allocate(data_exact(size(data_intpl, 1), size(data_intpl,2)))
+    
+    do j = 1, size(data_exact, 2)
+      do i = 1, size(data_exact, 1)
+        x = real(i-1, kind=dp)/real(size(data_exact, 1), kind=dp)
+        y = real(j-1, kind=dp)/real(size(data_exact, 2), kind=dp)
+        
+        data_exact(i, j) = (x + y**2)*dsin(Pi*x)*dsin(2.0_dp*Pi*y)
+        data_exact(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
+      end do
+    end do
+    
+    
+!     call print_array(data_exact-data_intpl, "data_exact-data_intpl")
+
+    if (.not. iszero(data_exact-data_intpl)) then
+      call abort_handle(" ! FAIL  @ Inconsistent interpolation FFT", __FILE__, __LINE__)
+    end if
+    
+    data_intpl = 0.0_dp
+    deallocate(data_intpl)
+    deallocate(out_intpl)
     deallocate(in)
     deallocate(out)
+    deallocate(out_b)
+    
+    ! Test 3: Interpolation subroutine
+    call fourier_intpl(data_intpl, data_in, scx, scy)
+    if (.not. iszero(data_exact-data_intpl)) then
+      call abort_handle(" ! FAIL  @ Inconsistent fourier_intpl", __FILE__, __LINE__)
+    end if
+    
+    deallocate(data_in)
+    deallocate(data_exact)
+    deallocate(data_intpl)
+    
+
     
   end subroutine fftw_test
+  
+  subroutine fourier_intpl(out, in, Mx, My)
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+
+    real(kind=dp), dimension(:, :), intent(out), allocatable :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My
+  
+    type(C_PTR) :: plan
+    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: Zk, Zk_pad
+    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    
+    integer :: i, j, dj
+    
+    allocate(out(size(in,1)*Mx, size(in,2)*My))
+    allocate(in_copy(size(in,1), size(in,2)))
+    allocate(Zk(size(in,1)/2+1, size(in,2)))
+
+    in_copy = in
+    
+    ! Forward FFT
+    plan = fftw_plan_dft_r2c_2d(size(in_copy,2), size(in_copy,1), in_copy, Zk, FFTW_ESTIMATE)
+    call fftw_execute_dft_r2c(plan, in_copy, Zk)
+    call fftw_destroy_plan(plan)
+    deallocate(in_copy)
+
+    allocate(Zk_pad(size(out,1)/2+1, size(out,2)))
+    Zk_pad = 0.0_dp
+    
+    !! Algorithm: https://web.eecs.umich.edu/~fessler/course/451/l/pdf/c5.pdf
+    !! FFT-based approach: zero-pad in the frequency domain
+    
+    ! Zero padding along row (x-direction)
+    ! Note r2c reprentation: last row = N/2+1 term
+    do j = 1, size(Zk, 2)
+      do i = 1, size(Zk, 1)
+        Zk_pad(i, j) = Zk(i,j)
+      end do
+    end do
+    
+    ! Halve the N/2+1 term
+    i = size(Zk, 1)
+    do j = 1, size(Zk, 2)
+      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
+    end do
+    
+    ! Zero padding along column (y-direction)
+    ! Shift along column
+    do j = (size(Zk, 2)/2+2), size(Zk, 2)
+      do i = 1, size(Zk_pad, 1)-1
+        Zk_pad(i, j+(My-1)*size(Zk, 2)) = Zk_pad(i, j)
+        Zk_pad(i, j) = 0.0_dp
+      end do
+    end do
+
+    ! Halve the N/2+1 term
+    j = size(Zk, 2)/2 + 1
+    do i = 1, size(Zk, 1)
+      Zk_pad(i, j+(My-1)*size(Zk, 2)) = 0.5_dp*Zk_pad(i, j)
+      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
+    end do
+    
+   ! Inverse FFT
+    plan = fftw_plan_dft_c2r_2d(size(out,2),size(out,1), Zk_pad, out, FFTW_ESTIMATE)
+    call fftw_execute_dft_c2r(plan, Zk_pad, out)
+    
+    out = out/real(size(in,1)*size(in,2),kind=dp)
+    
+    deallocate(Zk)
+    deallocate(Zk_pad)
+    
+  end subroutine fourier_intpl
   
   subroutine unittest_solver_timing()
     type(field) :: q, K11, K22, K12, psi
