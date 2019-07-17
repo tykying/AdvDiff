@@ -1,5 +1,4 @@
 module advdiff_field
-
   use advdiff_precision
   use advdiff_debug
 
@@ -14,7 +13,6 @@ module advdiff_field
     & eval_field, iszero, &
     & assemble_psi, assemble_K, &
     & psi_fn, K_fn, &
-    & assemble_T, assemble_T_MPFA, assemble_Flux_MPFA, &
     & assemble_Ke
 
   public :: indicator_field
@@ -53,12 +51,12 @@ module advdiff_field
 
   interface allocate
     module procedure allocate_field, allocate_uv, &
-                     allocate_Kflux, allocate_KfluxE, allocate_T_ops, &
+                     allocate_Kflux, allocate_KfluxE, &
                      allocate_refined_field
   end interface allocate
 
   interface deallocate
-    module procedure deallocate_field, deallocate_uv, deallocate_Kflux, deallocate_T_ops
+    module procedure deallocate_field, deallocate_uv, deallocate_Kflux
   end interface deallocate
 
   interface zeros
@@ -86,19 +84,6 @@ module advdiff_field
   end interface print_info
 
 contains
-  subroutine allocate_T_ops(T_ops, m, n)
-    type(T_operator), dimension(:,:), pointer, intent(inout) :: T_ops
-    integer, intent(in) :: m, n
-
-    allocate(T_ops(m+1, n+1))
-  end subroutine allocate_T_ops
-
-  subroutine deallocate_T_ops(T_ops)
-    type(T_operator), dimension(:,:), pointer, intent(inout) :: T_ops
-
-    deallocate(T_ops)
-  end subroutine deallocate_T_ops
-
   subroutine allocate_field(fld, m, n, name, glayer, type_id)
     type(field), intent(out) :: fld
     integer, intent(in) :: m
@@ -288,65 +273,13 @@ contains
     type(field), intent(in) :: fld
     integer, intent(in) :: i_reflv, j_reflv
 
-    integer :: i, j, i_lv, j_lv, i_mesh, j_mesh
-    integer :: idiv, jdiv, imod, jmod
-    real(kind=dp) :: ialpha, jalpha
-    integer :: M, N
-
     call allocate(rfld, fld%m*i_reflv, fld%n*j_reflv, "r"//trim(fld%name), fld%glayer, fld%type_id)
 
     if (fld%type_id .eq. 0) then
-! !       ! PWC interpolations
-! !       do j = 1, size(fld%data, 2)
-! !         do i = 1, size(fld%data, 1)
-! !           do j_lv = 1, j_reflv
-! !           do i_lv = 1, i_reflv
-! !             i_mesh = i_reflv*(i-1)+i_lv
-! !             j_mesh = j_reflv*(j-1)+j_lv
-! !             rfld%data(i_mesh, j_mesh) = fld%data(i, j)
-! !           end do
-! !           end do
-! !         end do
-! !       end do
-
-          ! cosine interpolations
-          call cosine_intpl(rfld%data, fld%data, i_reflv, j_reflv)
-          
+      ! Cosine interpolations
+      call cosine_intpl(rfld%data, fld%data, i_reflv, j_reflv)
+      
     elseif (fld%type_id .eq. 1) then
-! !       ! Bilinear interpolations: for psi
-! !       do j = 1, size(rfld%data, 2)
-! !         do i = 1, size(rfld%data, 1)
-! !           idiv = (i-1)/i_reflv+1
-! !           jdiv = (j-1)/j_reflv+1
-! !           imod = mod(i-1, i_reflv)
-! !           jmod = mod(j-1, j_reflv)
-! !           ialpha = real(imod, kind=dp)/real(i_reflv, kind=dp)
-! !           jalpha = real(jmod, kind=dp)/real(j_reflv, kind=dp)
-! ! 
-! !           if ((imod .eq. 0) .and. (jmod .eq. 0)) then
-! !             ! Refined and coarse grid point
-! !             ! No interpolations
-! !             rfld%data(i,j) = fld%data(idiv, jdiv)
-! !           elseif (imod .eq. 0) then
-! !             ! Grid point with x-coordinate aligned
-! !             ! 1D interpolation
-! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-jalpha) &
-! !                             + fld%data(idiv, jdiv+1)*jalpha
-! !           elseif (jmod .eq. 0) then
-! !             ! Grid point with y-coordinate aligned
-! !             ! 1D interpolation
-! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha) &
-! !                             + fld%data(idiv+1, jdiv)*ialpha
-! !           else
-! !             ! Bilinear interpolation
-! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha)*(1.0_dp-jalpha) &
-! !             + fld%data(idiv+1, jdiv)*ialpha*(1.0_dp-jalpha) &
-! !             + fld%data(idiv, jdiv+1)*(1.0_dp-ialpha)*jalpha &
-! !             + fld%data(idiv+1, jdiv+1)*ialpha*jalpha
-! !           end if
-! !         end do
-! !       end do
-
       ! Fourier interpolations
       call fourier_intpl(rfld%data(1:fld%m*i_reflv, 1:fld%n*j_reflv), &
                   fld%data(1:fld%m, 1:fld%n), i_reflv, j_reflv)
@@ -518,129 +451,6 @@ contains
     end if
   end subroutine allocate_Kflux
 
-  subroutine assemble_T_MPFA(T_ops, K11, K22, K12)
-    type(T_operator), dimension(:, :), pointer, intent(inout) :: T_ops
-    type(field), intent(in) :: K11, K22, K12
-
-    integer :: m, n, i, j, im, ip, jm, jp
-
-    real(kind=dp), dimension(4) :: a, b, c
-
-    m = K11%m
-    n = K22%n
-
-    ! cell-base assemble
-    !  3 | 4
-    ! ---+---
-    !  1 | 2
-
-    !! T: defined at +, dimension (m+1, n+1) same as psi
-    do j = 1, n+1
-      do i = 1, m+1
-        im = max(1, i-1)
-        ip = min(m, i)
-        jm = max(1, j-1)
-        jp = min(n, j)
-
-        a = (/ K11%data(im,jm), K11%data(ip,jm), K11%data(im,jp), K11%data(ip,jp) /)
-        b = (/ K22%data(im,jm), K22%data(ip,jm), K22%data(im,jp), K22%data(ip,jp) /)
-        c = (/ K12%data(im,jm), K12%data(ip,jm), K12%data(im,jp), K12%data(ip,jp) /)
-
-        T_ops(i, j)%T = assemble_T(a, b, c)
-      end do
-    end do
-
-  end subroutine assemble_T_MPFA
-
-  subroutine assemble_Flux_MPFA(F, G, q, T_ops)
-    real(kind=dp), dimension(:, :), intent(out) :: F, G
-    type(T_operator), dimension(:, :), pointer, intent(in) :: T_ops
-    type(field), intent(in) :: q
-
-    integer :: m, n, i, j
-    real(kind=dp), dimension(:,:), pointer :: lq
-    integer :: gl
-
-    gl = q%glayer
-    lq => q%data
-
-    m = size(G, 1)
-    n = size(F, 2)
-
-    do j = 1, n
-      do i = 1, m+1
-        F(i,j) = T_ops(i,j)%T(2,1)*lq(i+gl-1, j+gl-1) + T_ops(i,j)%T(2,2)*lq(i+gl  , j+gl-1) &
-                + T_ops(i,j)%T(2,3)*lq(i+gl-1, j+gl  ) + T_ops(i,j)%T(2,4)*lq(i+gl  , j+gl  ) &
-                + T_ops(i,j+1)%T(1,1)*lq(i+gl-1, j+gl  ) + T_ops(i,j+1)%T(1,2)*lq(i+gl  , j+gl  ) &
-                + T_ops(i,j+1)%T(1,3)*lq(i+gl-1, j+gl+1) + T_ops(i,j+1)%T(1,4)*lq(i+gl  , j+gl+1)
-      end do
-    end do
-
-    do j = 1, n+1
-      do i = 1, m
-        G(i,j) = T_ops(i,j)%T(4,1)*lq(i+gl-1, j+gl-1) + T_ops(i,j)%T(4,2)*lq(i+gl  , j+gl-1) &
-                + T_ops(i,j)%T(4,3)*lq(i+gl-1, j+gl  ) + T_ops(i,j)%T(4,4)*lq(i+gl  , j+gl  ) &
-                + T_ops(i+1,j)%T(3,1)*lq(i+gl  , j+gl-1) + T_ops(i+1,j)%T(3,2)*lq(i+gl+1, j+gl-1) &
-                + T_ops(i+1,j)%T(3,3)*lq(i+gl  , j+gl  ) + T_ops(i+1,j)%T(3,4)*lq(i+gl+1, j+gl  )
-      end do
-    end do
-
-  end subroutine assemble_Flux_MPFA
-
-  function assemble_T(a, b, c) result(T)
-    implicit none
-    real(kind=dp), dimension(4,4) :: T
-    real(kind=dp), dimension(4), intent(in) :: a, b, c
-
-    real(kind=dp), dimension(4,4) :: MatC, MatA, MatB, MatAinv
-
-    MatC = reshape((/ -a(1), 0.0_dp, 0.0_dp, c(2), &
-                 0.0_dp, a(4), -c(3), 0.0_dp, &
-                 -c(1), 0.0_dp, b(3), 0.0_dp, &
-                 0.0_dp, c(4), 0.0_dp, -b(2) /), shape(MatC))
-
-    MatA = reshape((/ -a(1)-a(2), 0.0_dp, c(1), c(2), &
-                 0.0_dp, a(4)+a(3), -c(3), -c(4), &
-                 -c(1), -c(3), b(3)+b(1), 0.0_dp, &
-                 c(2), c(4), 0.0_dp, -b(2)-b(4) /), shape(MatA))
-
-    MatB = reshape((/ -a(1)-c(1), 0.0_dp, c(1)+b(1), 0.0_dp, &
-                 -a(2)+c(2), 0.0_dp, 0.0_dp, c(2)-b(2), &
-                 0.0_dp, a(3)-c(3), -c(3)+b(3), 0.0_dp, &
-                 0.0_dp, a(4)+c(4), 0.0_dp, -c(4)-b(4) /), shape(MatB))
-
-    ! Store initially Matrix F
-    T = reshape((/ a(1)+c(1), 0.0_dp, 0.0_dp, 0.0_dp, &
-                 0.0_dp, 0.0_dp, 0.0_dp, -c(2)+b(2), &
-                 0.0_dp, 0.0_dp, c(3)-b(3), 0.0_dp, &
-                 0.0_dp, -a(4)-c(4), 0.0_dp, 0.0_dp /), shape(T))
-
-    ! Invert A and store invA*B to MatA
-    MatAinv = inv(MatA)
-    call DGEMM("N", "N", 4, 4, 4, 1.0_dp, MatAinv, 4, MatB, 4, 0.0_dp, MatA, 4)
-    call DGEMM("N", "N", 4, 4, 4, 1.0_dp, MatC, 4, MatA, 4, 1.0_dp, T, 4)
-  end function assemble_T
-
-  function inv(A) result(Ainv)
-    implicit none
-    real(kind=dp),intent(in) :: A(:,:)
-    real(kind=dp)   :: Ainv(size(A,1),size(A,2))
-    real(kind=dp)   :: work(size(A,1))              ! work array for LAPACK
-    integer         :: N, info, ipiv(size(A,1))     ! pivot indices
-
-    ! Store A in Ainv to prevent it from being overwritten by LAPACK
-    Ainv = A
-    N = size(A,1)
-    ! DGETRF computes an LU factorization of a general M-by-N matrix A
-    ! using partial pivoting with row interchanges.
-    call DGETRF(N,N,Ainv,N,ipiv,info)
-    if (info.ne.0) stop 'Matrix is numerically singular!'
-    ! DGETRI computes the inverse of a matrix using the LU factorization
-    ! computed by SGETRF.
-    call DGETRI(N,Ainv,N,ipiv,work,N,info)
-    if (info.ne.0) stop 'Matrix inversion failed!'
-  end function inv
-
   subroutine allocate_KfluxE(K_e, K11e, K12e, K21e, K22e)
     type(K_flux), intent(inout) :: K_e
     type(field), intent(in) :: K11e, K12e, K21e, K22e
@@ -656,7 +466,6 @@ contains
     K_e%K22e = K22e%data
 
   end subroutine allocate_KfluxE
-
 
   subroutine deallocate_Kflux(K_e)
     type(K_flux), intent(inout) :: K_e
