@@ -2,6 +2,7 @@ import sys
 
 data_folder = './unittest/q64/TTG_sinusoidal/'
 data_folder = './unittest/convergence/'
+data_folder = './output/N4096_D64_I64/TTG_sinusoidal/h60d/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import matplotlib

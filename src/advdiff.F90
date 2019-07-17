@@ -23,7 +23,7 @@ contains
     !call unittest_trajdata()
     !call unittest_simulate_trajdata()
     !call unittest_solver_properties()
-    call fftw_test()
+    !call fftw_test()
     !call unittest_solver_timing()
     !call unittest_TGtrajs()  ! To update
     !call unittest_IO()
@@ -33,7 +33,7 @@ contains
     ! call unittest_2DLik()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    !call unittest_inference_OMP()
+    call unittest_inference_OMP()
     !call unittest_OMP_trial()
     !call unittest_DOF()
     !call unittest_read_DOF()
@@ -798,8 +798,9 @@ contains
     real(kind=dp), dimension(:, :), allocatable :: data_in, data_intpl, data_exact
     real(C_DOUBLE), dimension(:, :), allocatable :: in
     complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: out, out_b, out_intpl
-    
-    integer :: i, j, scx, scy, dj
+    real(C_DOUBLE), dimension(:, :), allocatable :: in_Re, out_Re, out_Reintpl
+
+    integer :: i, j, scx, scy, dj, Nx, Ny
     real(kind=dp) :: x, y
     
     allocate(data_in(M, N))
@@ -890,6 +891,7 @@ contains
     
     plan = fftw_plan_dft_c2r_2d(size(data_intpl,2),size(data_intpl,1), out_intpl, data_intpl, FFTW_ESTIMATE)
     call fftw_execute_dft_c2r(plan, out_intpl, data_intpl)
+    call fftw_destroy_plan(plan)
     
     data_intpl = data_intpl/real(size(data_in,1)*size(data_in,2),kind=dp)
     
@@ -923,6 +925,7 @@ contains
     deallocate(out_b)
     
     ! Test 3: Interpolation subroutine
+    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
     call fourier_intpl(data_intpl, data_in, scx, scy)
     if (.not. iszero(data_exact-data_intpl)) then
       call abort_handle(" ! FAIL  @ Inconsistent fourier_intpl", __FILE__, __LINE__)
@@ -932,82 +935,116 @@ contains
     deallocate(data_exact)
     deallocate(data_intpl)
     
+    
+    ! Discrete Cosine transform
+    Nx = 16
+    Ny = 8
+    allocate(data_in(Nx, Ny))
+    allocate(data_intpl(Nx, Ny))
+    
+    do j = 1, size(data_in, 2)
+      do i = 1, size(data_in, 1)
+        x = real(2*i-1, kind=dp)/real(2*Nx, kind=dp)
+        y = real(2*j-1, kind=dp)/real(2*Ny, kind=dp)
+        
+!        data_in(i, j) = dcos(Pi*(x+y))*dcos(2.0_dp*Pi*(x-y));
+        data_in(i, j) = dcos(Pi*x)*dcos(2.0_dp*Pi*y) + dcos(4.0_dp*Pi*x)*dcos(6.0_dp*Pi*y);
+        !data_in(i, j) = (x + y**2)*dsin(Pi*x)*dcos(2.0_dp*Pi*(x-y))
+        !data_in(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
+      end do
+    end do
+    
+    
+    !! Forward-Inverse cosine
+    allocate(in_Re(Nx, Ny))
+    allocate(out_Re(Nx, Ny))
+    
+    plan = fftw_plan_r2r_2d(size(in_Re,2),size(in_Re,1), in_Re, out_Re,  &
+                            FFTW_REDFT10, FFTW_REDFT10, FFTW_ESTIMATE)
+    in_Re = data_in
+!     call print_array(in_Re, "data_in")
+    
+    call fftw_execute_r2r(plan, in_Re, out_Re)
+    call fftw_destroy_plan(plan)
+!     call print_array(out_Re, "out_Re")
+    
+    scx = 2
+    scy = 2
+    allocate(out_Reintpl(scx*Nx, scy*Ny))
+    
+    out_Reintpl = 0.0_dp
+    do j = 1, size(out_Re, 2)
+      do i = 1, size(out_Re, 1)
+        out_Reintpl(i, j) = out_Re(i, j)
+      end do
+    end do
+    
+    plan = fftw_plan_r2r_2d(size(out_Re,2),size(out_Re,1), out_Re, data_intpl,  &
+                            FFTW_REDFT01, FFTW_REDFT01, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, out_Re, data_intpl)
+    call fftw_destroy_plan(plan)
+    data_intpl = data_intpl/(4*Nx*Ny)
+
+    if (.not. iszero(data_intpl-data_in)) &
+      call abort_handle("! FAIL  @ Inconsistent forward-backward DCT", __FILE__, __LINE__)
+
+    deallocate(data_intpl)
+    
+    ! Interpolation
+    do j = 1, size(out_Re, 2)
+      do i = 1, size(out_Re, 1)
+        out_Re(i, j) = out_Reintpl(i, j)
+      end do
+    end do
+    
+    allocate(data_intpl(scx*Nx, scy*Ny))
+    data_intpl = 0.0_dp
+    plan = fftw_plan_r2r_2d(size(data_intpl,2),size(data_intpl,1), out_Reintpl, &
+                          data_intpl, FFTW_REDFT01, FFTW_REDFT01, FFTW_ESTIMATE)
+    
+    out_Reintpl = 0.0_dp
+    do j = 1, size(out_Re, 2)
+      do i = 1, size(out_Re, 1)
+        out_Reintpl(i, j) = out_Re(i, j)
+      end do
+    end do
+    
+    ! No rescaling needed here (although not same as dct2 in Matlab)
+    !! Relationship with matlab dct2
+    !! http://www.voidcn.com/article/p-pduypgxe-du.html
+    call fftw_execute_r2r(plan, out_Reintpl, data_intpl)
+    call fftw_destroy_plan(plan)
+    
+    data_intpl = data_intpl/(4*Nx*Ny)
+!     call print_array(data_intpl, "data_intpl")
+    
+    data_intpl = 0.0_dp
+    call cosine_intpl(data_intpl, data_in, scx, scy)
+!     call print_array(data_intpl, "data_intpl from cosine_intpl")
+
+    do j = 1, size(data_intpl, 2)
+      do i = 1, size(data_intpl, 1)
+        x = real(2*i-1, kind=dp)/real(2*size(data_intpl, 1), kind=dp)
+        y = real(2*j-1, kind=dp)/real(2*size(data_intpl, 2), kind=dp)
+        
+        data_intpl(i, j) = data_intpl(i, j) - & 
+              (dcos(Pi*x)*dcos(2.0_dp*Pi*y) + dcos(4.0_dp*Pi*x)*dcos(6.0_dp*Pi*y));
+      end do
+    end do
+    
+    if (.not. iszero(data_intpl)) &
+      call abort_handle("! FAIL  @ Inconsistent cosine_intpl", __FILE__, __LINE__)
+    
+    deallocate(in_Re)
+    deallocate(out_Re)
+    deallocate(data_in)
+    deallocate(data_intpl)
+    deallocate(out_Reintpl)
 
     
   end subroutine fftw_test
   
-  subroutine fourier_intpl(out, in, Mx, My)
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-
-    real(kind=dp), dimension(:, :), intent(out), allocatable :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My
   
-    type(C_PTR) :: plan
-    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: Zk, Zk_pad
-    real(kind=dp), dimension(:, :), allocatable :: in_copy
-    
-    integer :: i, j, dj
-    
-    allocate(out(size(in,1)*Mx, size(in,2)*My))
-    allocate(in_copy(size(in,1), size(in,2)))
-    allocate(Zk(size(in,1)/2+1, size(in,2)))
-
-    in_copy = in
-    
-    ! Forward FFT
-    plan = fftw_plan_dft_r2c_2d(size(in_copy,2), size(in_copy,1), in_copy, Zk, FFTW_ESTIMATE)
-    call fftw_execute_dft_r2c(plan, in_copy, Zk)
-    call fftw_destroy_plan(plan)
-    deallocate(in_copy)
-
-    allocate(Zk_pad(size(out,1)/2+1, size(out,2)))
-    Zk_pad = 0.0_dp
-    
-    !! Algorithm: https://web.eecs.umich.edu/~fessler/course/451/l/pdf/c5.pdf
-    !! FFT-based approach: zero-pad in the frequency domain
-    
-    ! Zero padding along row (x-direction)
-    ! Note r2c reprentation: last row = N/2+1 term
-    do j = 1, size(Zk, 2)
-      do i = 1, size(Zk, 1)
-        Zk_pad(i, j) = Zk(i,j)
-      end do
-    end do
-    
-    ! Halve the N/2+1 term
-    i = size(Zk, 1)
-    do j = 1, size(Zk, 2)
-      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
-    end do
-    
-    ! Zero padding along column (y-direction)
-    ! Shift along column
-    do j = (size(Zk, 2)/2+2), size(Zk, 2)
-      do i = 1, size(Zk_pad, 1)-1
-        Zk_pad(i, j+(My-1)*size(Zk, 2)) = Zk_pad(i, j)
-        Zk_pad(i, j) = 0.0_dp
-      end do
-    end do
-
-    ! Halve the N/2+1 term
-    j = size(Zk, 2)/2 + 1
-    do i = 1, size(Zk, 1)
-      Zk_pad(i, j+(My-1)*size(Zk, 2)) = 0.5_dp*Zk_pad(i, j)
-      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
-    end do
-    
-   ! Inverse FFT
-    plan = fftw_plan_dft_c2r_2d(size(out,2),size(out,1), Zk_pad, out, FFTW_ESTIMATE)
-    call fftw_execute_dft_c2r(plan, Zk_pad, out)
-    
-    out = out/real(size(in,1)*size(in,2),kind=dp)
-    
-    deallocate(Zk)
-    deallocate(Zk_pad)
-    
-  end subroutine fourier_intpl
   
   subroutine unittest_solver_timing()
     type(field) :: q, K11, K22, K12, psi
@@ -1965,15 +2002,15 @@ contains
     real(kind=dp) :: alphaUniRV
     real(kind=dp), dimension(1) :: UniRV
 
-    integer, parameter :: Td = 64
+    integer, parameter :: Td = 60
 !    character(len = *), parameter :: RunProfile = "K_TG_iso"
 !    character(len = *), parameter :: RunProfile = "K_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "TTG_const"
-!     character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
+    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "K_const"
 !    character(len = *), parameter :: RunProfile = "TTG100_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
@@ -1986,12 +2023,12 @@ contains
     call start(total_timer)
 
     ! m, n: DOF/control
-    m = 16
+    m = 8
     n = m
     ! reflv: Solver grid = (m*reflv, n*reflv)
-    reflv = 4
+    reflv = 8
     ! m_Ind, n_Ind: indicator functions
-    m_Ind = 16
+    m_Ind = 8
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -2039,6 +2076,7 @@ contains
     call print_info(dof)
     call print_info(IndFn)
     call print_info(h, nts, sc)
+    
 
 !   likelihood for each indicator function
     allocate(logPost(IndFn%nIND))
@@ -2051,6 +2089,7 @@ contains
 
     call init_random_seed();
 
+    
     ! Set up stepsize for random sampling
     call set(dof_SSD%psi, 0.05_dp*psi_scale*sc)
 
@@ -2063,6 +2102,8 @@ contains
     SlogPost = sum(logPost)
     !SlogPost = evaluate_Sloglik_OMP(jumps, IndFn, mesh, dof, h, nts)
     
+    write(6, *) "SlogPost = ", SlogPost
+    
     SlogPost_MAP = SlogPost
     SlogPost_old = SlogPost
     logPost_old = logPost
@@ -2072,7 +2113,8 @@ contains
 
     ind = 0
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", SlogPost_old
-    call write(dof_old, trim(output_fld), SlogPost, sc, ind)
+!     call write(dof_old, trim(output_fld), SlogPost, sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
 
     call reset_timestep_timers()
     call reset_inference_timers()
@@ -2082,10 +2124,9 @@ contains
     ! TODO: delete Adhoc
     
     niter = max(500, m*m)
-    niter = 200
+    niter = 300
     do iter = 1, niter
       ! In each iteration loop over all cells
-      !do dof_id = 1, 1
       do dof_id = 1, dof%ndof
         ! Initialise K_prop
         call set(dof, dof_old)
@@ -2134,12 +2175,14 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write(dof_old, trim(output_fld), SlogPost_old, sc, ind)
+        !call write(dof_old, trim(output_fld), SlogPost_old, sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
       end if
     end do
 
-    call write(dof_MAP, trim(output_fld)//"MAP_", SlogPost_MAP, sc, -1)
-    
+    !call write(dof_MAP, trim(output_fld)//"MAP_", SlogPost_MAP, sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta", sc, -1)
+
     ! Release memory
     call deallocate(traj)
     call deallocate(dof)
@@ -2162,7 +2205,7 @@ contains
     call print_inference_timers()
 
     write(6, "(a)") "Proposal timers:"
-    call print(propose_timer, "communication on node 0", prefix = "  ")
+    call print(propose_timer, "Proposal on node 0", prefix = "  ")
 
     write(6, "(a)") "Communication timers:"
     call print(commun_timer, "communication on node 0", prefix = "  ")

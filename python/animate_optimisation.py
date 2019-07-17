@@ -1,6 +1,6 @@
 import sys
 
-show_id = 20
+show_id = 10
 #data_folder = './output/output16/K_TG_iso/'
 #data_folder = './output/output16_ptwiseprop/K_TG_iso/'
 data_folder = './output/output16/K_sinusoidal/'
@@ -27,6 +27,7 @@ data_folder = './output/output16/TTG_sinusoidal/'
 #data_folder = './output/output16/QGM2_L1_NPART2704_iso/h64d/'
 #data_folder = './output/output48/QGM2_L1_NPART2704_iso/h64d/'
 data_folder = './output/N4096_D256_I256/QGM2_L1_NPART2704/h64d/'
+data_folder = './output/N4096_D64_I64/TTG_sinusoidal/h60d/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import numpy
@@ -88,7 +89,6 @@ def visualise_field(ax, field_in, ts, max_level, resc_unit):
   ax.set_aspect('equal')
   plt.axis('off')
   plt.colorbar(pcm, ax=ax)
-  tight_layout()
 
   # theo_logLik = -386479.35214807594
   # init_logLik = -395073.95702572557

@@ -15,8 +15,8 @@ make clean
 make
 
 date
-#nohup ./advdiff > mon_advdiff64.txt &
-./advdiff
+nohup ./advdiff > mon_advdiff64_2.txt &
+#./advdiff
 
 date 
 

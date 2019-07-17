@@ -15,7 +15,7 @@ module advdiff_inference
   public :: allocate, deallocate, set, reset_inference_timers, print_inference_timers
   public :: validate_IndFn
   public :: propose_dof
-  public :: evaluate_loglik_IND, eval_INDk_loglik
+  public :: eval_INDk_loglik
 
   type dofdat
     integer :: m, n
@@ -154,65 +154,6 @@ contains
 
     k2j_dof = (k-1)/ dof%m + 1
   end function k2j_dof
-
-  ! For parallel computing
-  pure integer function count_cell(my_id, num_procs, mesh)
-    ! Input: my_id
-    ! Output: number of cells attributed to my_id
-    type(meshdat), intent(in) :: mesh
-    integer, intent(in) :: my_id, num_procs
-
-    integer :: cell
-
-    count_cell = 0
-    do cell = 1, mesh%ncell
-      if (get_partition(cell, num_procs) .eq. my_id) count_cell = count_cell + 1
-    end do
-
-  end function count_cell
-
-  pure integer function get_partition(k, num_procs)
-    ! Input: index of a cell k
-    !        total number of nodes = num_procs
-    ! Output: if (my_id == output) then do the job
-    integer, intent(in) :: k, num_procs
-
-    ! Mod partition
-    get_partition = mod(k, num_procs)
-
-  end function get_partition
-
-  subroutine evaluate_loglik_IND(loglik, jumps, IndFn, mesh, dof, h, nts, my_id, num_procs)
-    real(kind=dp), dimension(:), intent(out) :: loglik
-    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
-    type(IndFndat), intent(in) :: IndFn
-    type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof
-    real(kind=dp), intent(in) :: h
-    integer, intent(in) :: nts
-    integer, optional, intent(in) :: my_id, num_procs
-
-    integer :: INDk
-    integer :: node_id, nproc
-
-    ! Compatibility with single node
-    if (present(my_id) .and. present(num_procs)) then
-      node_id = my_id
-      nproc = num_procs
-    else
-      node_id = 0
-      nproc = 1
-    end if
-
-    do INDk = 1, IndFn%nIND
-      if (get_partition(INDk, nproc) .eq. node_id) then
-        loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
-      else
-        loglik(INDk) = 0.0_dp
-      end if
-    end do
-
-  end subroutine evaluate_loglik_IND
   
   subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
     real(kind=dp), dimension(:), intent(out) :: loglik
@@ -225,38 +166,19 @@ contains
 
     integer :: INDk
 
+    type(dofdat) :: rdof  ! Refined dof for computation
+    call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
+
     !! Control number of thread by "num_threads(32)" after "DO"
     !$OMP PARALLEL DO
     do INDk = 1, IndFn%nIND
-      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
+      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, rdof, h, nts)
     end do
     !$OMP END PARALLEL DO
+    
+    call deallocate(rdof)
     
   end subroutine evaluate_loglik_OMP
-  
-  real(kind=dp) function evaluate_Sloglik_OMP(jumps, IndFn, mesh, dof, h, nts)
-    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
-    type(IndFndat), intent(in) :: IndFn
-    type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof
-    real(kind=dp), intent(in) :: h
-    integer, intent(in) :: nts
-
-    real(kind=dp) :: Sloglik
-
-    integer :: INDk
-
-    Sloglik = 0.0_dp
-    
-    !$OMP PARALLEL DO REDUCTION(+:Sloglik) num_threads(32)
-    do INDk = 1, IndFn%nIND
-      Sloglik = Sloglik + eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
-    end do
-    !$OMP END PARALLEL DO
-    
-    evaluate_Sloglik_OMP = Sloglik
-    
-  end function evaluate_Sloglik_OMP
   
   subroutine INDk_to_klist(klist, INDk, IndFn, mesh)
     integer, dimension(:), allocatable, intent(out) :: klist
@@ -327,23 +249,17 @@ contains
     real(kind=dp) :: lik
     integer :: k_i, i
 
-    type(dofdat) :: rdof  ! Refined dof for computation
-
     call start(loglik_timer)
 
     eval_INDk_loglik = 0.0_dp
 
     ! Find out the cells corresponding to the indicator function
     call INDk_to_klist(klist, INDk, IndFn, mesh)
-   
-    call start(reffld_timer)
-    call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-    call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=0)
-    call stop(reffld_timer)
+    call allocate(q, dof%m, dof%n, 'q', glayer=1,type_id=0)
     
     ! Solve FK equation
     call initialise_q(q, klist, mesh)
-    call advdiff_q(q, rdof%psi, rdof%K11, rdof%K22, rdof%K12, h, nts)
+    call advdiff_q(q, dof%psi, dof%K11, dof%K22, dof%K12, h, nts)
 !       if (.not. is_nneg(q%data)) then
 !         write(6, "(a,"//dp_chr//")") "Non-negative q!: ", minval(q%data)
 !       end if
@@ -362,7 +278,6 @@ contains
     call stop(intpl_timer)
 
     call deallocate(q)
-    call deallocate(rdof)
 
     deallocate(klist)
     
@@ -404,16 +319,10 @@ contains
     type(dofdat), intent(inout) :: dof
     integer, intent(in) :: dof_id
     type(dofdat), intent(in) :: dof_SSD
-
-    !write(6, *) "propose_dof: Proposing two changes at a time"
-    if (mod(dof_id, 2) .eq. 0) then
-      call propose_dof_K(dof, dof_id, dof_SSD)
-      call propose_dof_K(dof, dof%ndof-dof_id+1, dof_SSD)
-    else
-      call propose_dof_psi(dof, dof_id, dof_SSD)
-      call propose_dof_psi(dof, dof%ndof-dof_id+1, dof_SSD)
-      call imposeBC_cornerpsi(dof)
-    end if
+     
+    call propose_dof_K(dof, dof_id, dof_SSD)
+    call propose_dof_psi(dof, dof%ndof-dof_id+1, dof_SSD)
+    call imposeBC_cornerpsi(dof)
     
   end subroutine propose_dof
   
@@ -499,7 +408,7 @@ contains
       end do
       
       ! Impose boundary condition
-      call imposeBC_cornerK(dof)
+      !call imposeBC_cornerK(dof)
     else
       call abort_handle("Invalid type_id for K", __FILE__, __LINE__)
     end if
@@ -516,16 +425,13 @@ contains
 
     i0 = k2i(dof_id, dof)
     j0 = k2j(dof_id, dof)
-
+    
+    ! Fourier basis
     if (dof%psi%type_id .ne. 1) &
       call abort_handle("Invalid type_id for psi", __FILE__, __LINE__)
-
-    ! Vary the psi values at the corners
-    dof%psi%data(i0  ,j0  ) = dof%psi%data(i0  ,j0  ) + dof_SSD%psi%data(i0  ,j0  )*randn()
-    dof%psi%data(i0+1,j0  ) = dof%psi%data(i0+1,j0  ) + dof_SSD%psi%data(i0+1,j0  )*randn()
-    dof%psi%data(i0  ,j0+1) = dof%psi%data(i0  ,j0+1) + dof_SSD%psi%data(i0  ,j0+1)*randn()
-    dof%psi%data(i0+1,j0+1) = dof%psi%data(i0+1,j0+1) + dof_SSD%psi%data(i0+1,j0+1)*randn()
-
+    
+    dof%psi%data(i0,j0) = dof%psi%data(i0,j0) + dof_SSD%psi%data(i0,j0)*randn()
+    
   end subroutine propose_dof_psi
 
   subroutine imposeBC_cornerpsi(dof)
@@ -547,35 +453,6 @@ contains
     end do
 
   end subroutine imposeBC_cornerpsi
-
-  ! TODO: cornerK
-  subroutine imposeBC_cornerK(dof)
-    type(dofdat), intent(inout) :: dof
-
-    integer :: i, j, mp1, np1
-
-    mp1 = size(dof%K11%data, 1)
-    np1 = size(dof%K11%data, 2)
-
-    do j = 1, np1
-      dof%K11%data(1, j) = dof%K11%data(2, j)
-      dof%K12%data(1, j) = dof%K12%data(2, j)
-      dof%K22%data(1, j) = dof%K22%data(2, j)
-      dof%K11%data(mp1, j) = dof%K11%data(mp1-1, j)
-      dof%K12%data(mp1, j) = dof%K12%data(mp1-1, j)
-      dof%K22%data(mp1, j) = dof%K22%data(mp1-1, j)
-    end do
-
-    do i = 1, mp1
-      dof%K11%data(i, 1) = dof%K11%data(i, 2)
-      dof%K12%data(i, 1) = dof%K12%data(i, 2)
-      dof%K22%data(i, 1) = dof%K22%data(i, 2)
-      dof%K11%data(i, np1) = dof%K11%data(i, np1-1)
-      dof%K12%data(i, np1) = dof%K12%data(i, np1-1)
-      dof%K22%data(i, np1) = dof%K22%data(i, np1-1)
-    end do
-
-  end subroutine imposeBC_cornerK
 
   subroutine reset_inference_timers()
     call reset(loglik_timer)

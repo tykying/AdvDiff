@@ -22,7 +22,8 @@ module advdiff_field
   public :: print_info, diff_int
   public :: testcase_fields, fld_x, assign_q_periodic
   public :: q_stat, S_rhs_nonstat, S_rhs_stat
-
+  public :: fourier_intpl, cosine_intpl
+  
   ! Note: field and field_ptr are different
   type field
     integer :: m, n
@@ -129,6 +130,9 @@ contains
     elseif (fld%type_id .eq. 1) then
       ! Defined at corner
       allocate(fld%data(fld%m+1+2*gl, fld%n+1+2*gl))
+    elseif (fld%type_id .eq. 2) then
+      ! Defined at corner, without right and top boundaries for Fourier transform
+      allocate(fld%data(fld%m+2*gl, fld%n+2*gl))
     end if
 
     if(len_trim(name) > field_name_len) then
@@ -144,7 +148,141 @@ contains
     deallocate(fld%data)
 
   end subroutine deallocate_field
+  
+  ! Fourier interpolations
+  subroutine fourier_intpl(out, in, Mx, My)
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
 
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+  
+    type(C_PTR) :: plan
+    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: Zk, Zk_pad
+    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    
+    integer :: i, j
+    
+    if (size(out, 1) .ne. size(in, 1) * Mx) &
+      call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
+    if (size(out, 2) .ne. size(in, 2) * My) &
+      call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
+    
+    allocate(in_copy(size(in,1), size(in,2)))
+    allocate(Zk(size(in,1)/2+1, size(in,2)))
+
+    in_copy = in
+    
+    ! Forward FFT
+    plan = fftw_plan_dft_r2c_2d(size(in_copy,2), size(in_copy,1), in_copy, Zk, FFTW_ESTIMATE)
+    call fftw_execute_dft_r2c(plan, in_copy, Zk)
+    call fftw_destroy_plan(plan)
+
+    allocate(Zk_pad(size(out,1)/2+1, size(out,2)))
+    Zk_pad = 0.0_dp
+    
+    !! Algorithm: https://web.eecs.umich.edu/~fessler/course/451/l/pdf/c5.pdf
+    !! FFT-based approach: zero-pad in the frequency domain
+    
+    ! Zero padding along row (x-direction)
+    ! Note r2c reprentation: last row = N/2+1 term
+    do j = 1, size(Zk, 2)
+      do i = 1, size(Zk, 1)
+        Zk_pad(i, j) = Zk(i,j)
+      end do
+    end do
+    
+    ! Halve the N/2+1 term
+    i = size(Zk, 1)
+    do j = 1, size(Zk, 2)
+      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
+    end do
+    
+    ! Zero padding along column (y-direction)
+    ! Shift along column
+    do j = (size(Zk, 2)/2+2), size(Zk, 2)
+      do i = 1, size(Zk_pad, 1)-1
+        Zk_pad(i, j+(My-1)*size(Zk, 2)) = Zk_pad(i, j)
+        Zk_pad(i, j) = 0.0_dp
+      end do
+    end do
+
+    ! Halve the N/2+1 term
+    j = size(Zk, 2)/2 + 1
+    do i = 1, size(Zk, 1)
+      Zk_pad(i, j+(My-1)*size(Zk, 2)) = 0.5_dp*Zk_pad(i, j)
+      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
+    end do
+    
+   ! Inverse FFT
+    plan = fftw_plan_dft_c2r_2d(size(out,2),size(out,1), Zk_pad, out, FFTW_ESTIMATE)
+    call fftw_execute_dft_c2r(plan, Zk_pad, out)
+    call fftw_destroy_plan(plan)
+
+    out = out/real(size(in,1)*size(in,2),kind=dp)
+    
+    deallocate(Zk)
+    deallocate(Zk_pad)
+    deallocate(in_copy)
+    
+  end subroutine fourier_intpl
+
+  subroutine cosine_intpl(out, in, Mx, My)
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+  
+    type(C_PTR) :: plan
+    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
+    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    
+    integer :: i, j
+    
+    if (size(out, 1) .ne. size(in, 1) * Mx) &
+      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+    if (size(out, 2) .ne. size(in, 2) * My) &
+      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+    
+    allocate(Bpq(size(in,1), size(in,2)))
+    allocate(in_copy(size(in,1), size(in,2)))
+    allocate(Bpq_pad(size(out,1), size(out,2)))
+
+    in_copy = in
+    
+    ! Forward DCT
+    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
+                            FFTW_REDFT10, FFTW_REDFT10, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, in_copy, Bpq)
+    call fftw_destroy_plan(plan)
+
+    ! Zero padding: only need to pad zeros beyond Bpq
+    !! Relationship with matlab dct2
+    !! http://www.voidcn.com/article/p-pduypgxe-du.html
+    Bpq_pad = 0.0_dp
+    do j = 1, size(Bpq, 2)
+      do i = 1, size(Bpq, 1)
+        Bpq_pad(i, j) = Bpq(i, j)
+      end do
+    end do
+    
+    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
+                          out, FFTW_REDFT01, FFTW_REDFT01, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, Bpq_pad, out)
+    call fftw_destroy_plan(plan)
+
+    out = out/(4*size(in,1)*size(in,2))
+    
+    deallocate(Bpq)
+    deallocate(Bpq_pad)
+    deallocate(in_copy)
+    
+  end subroutine cosine_intpl
+  
+  
   subroutine allocate_refined_field(rfld, fld, i_reflv, j_reflv)
     type(field), intent(out) :: rfld
     type(field), intent(in) :: fld
@@ -153,57 +291,65 @@ contains
     integer :: i, j, i_lv, j_lv, i_mesh, j_mesh
     integer :: idiv, jdiv, imod, jmod
     real(kind=dp) :: ialpha, jalpha
+    integer :: M, N
 
     call allocate(rfld, fld%m*i_reflv, fld%n*j_reflv, "r"//trim(fld%name), fld%glayer, fld%type_id)
 
     if (fld%type_id .eq. 0) then
-      ! PWC interpolations
-      do j = 1, size(fld%data, 2)
-        do i = 1, size(fld%data, 1)
-          do j_lv = 1, j_reflv
-          do i_lv = 1, i_reflv
-            i_mesh = i_reflv*(i-1)+i_lv
-            j_mesh = j_reflv*(j-1)+j_lv
-            rfld%data(i_mesh, j_mesh) = fld%data(i, j)
-          end do
-          end do
-        end do
-      end do
+! !       ! PWC interpolations
+! !       do j = 1, size(fld%data, 2)
+! !         do i = 1, size(fld%data, 1)
+! !           do j_lv = 1, j_reflv
+! !           do i_lv = 1, i_reflv
+! !             i_mesh = i_reflv*(i-1)+i_lv
+! !             j_mesh = j_reflv*(j-1)+j_lv
+! !             rfld%data(i_mesh, j_mesh) = fld%data(i, j)
+! !           end do
+! !           end do
+! !         end do
+! !       end do
+
+          ! cosine interpolations
+          call cosine_intpl(rfld%data, fld%data, i_reflv, j_reflv)
+          
     elseif (fld%type_id .eq. 1) then
-      ! Bilinear interpolations: for psi
-      do j = 1, size(rfld%data, 2)
-        do i = 1, size(rfld%data, 1)
-          idiv = (i-1)/i_reflv+1
-          jdiv = (j-1)/j_reflv+1
-          imod = mod(i-1, i_reflv)
-          jmod = mod(j-1, j_reflv)
-          ialpha = real(imod, kind=dp)/real(i_reflv, kind=dp)
-          jalpha = real(jmod, kind=dp)/real(j_reflv, kind=dp)
+! !       ! Bilinear interpolations: for psi
+! !       do j = 1, size(rfld%data, 2)
+! !         do i = 1, size(rfld%data, 1)
+! !           idiv = (i-1)/i_reflv+1
+! !           jdiv = (j-1)/j_reflv+1
+! !           imod = mod(i-1, i_reflv)
+! !           jmod = mod(j-1, j_reflv)
+! !           ialpha = real(imod, kind=dp)/real(i_reflv, kind=dp)
+! !           jalpha = real(jmod, kind=dp)/real(j_reflv, kind=dp)
+! ! 
+! !           if ((imod .eq. 0) .and. (jmod .eq. 0)) then
+! !             ! Refined and coarse grid point
+! !             ! No interpolations
+! !             rfld%data(i,j) = fld%data(idiv, jdiv)
+! !           elseif (imod .eq. 0) then
+! !             ! Grid point with x-coordinate aligned
+! !             ! 1D interpolation
+! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-jalpha) &
+! !                             + fld%data(idiv, jdiv+1)*jalpha
+! !           elseif (jmod .eq. 0) then
+! !             ! Grid point with y-coordinate aligned
+! !             ! 1D interpolation
+! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha) &
+! !                             + fld%data(idiv+1, jdiv)*ialpha
+! !           else
+! !             ! Bilinear interpolation
+! !             rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha)*(1.0_dp-jalpha) &
+! !             + fld%data(idiv+1, jdiv)*ialpha*(1.0_dp-jalpha) &
+! !             + fld%data(idiv, jdiv+1)*(1.0_dp-ialpha)*jalpha &
+! !             + fld%data(idiv+1, jdiv+1)*ialpha*jalpha
+! !           end if
+! !         end do
+! !       end do
 
-          if ((imod .eq. 0) .and. (jmod .eq. 0)) then
-            ! Refined and coarse grid point
-            ! No interpolations
-            rfld%data(i,j) = fld%data(idiv, jdiv)
-          elseif (imod .eq. 0) then
-            ! Grid point with x-coordinate aligned
-            ! 1D interpolation
-            rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-jalpha) &
-                            + fld%data(idiv, jdiv+1)*jalpha
-          elseif (jmod .eq. 0) then
-            ! Grid point with y-coordinate aligned
-            ! 1D interpolation
-            rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha) &
-                            + fld%data(idiv+1, jdiv)*ialpha
-          else
-            ! Bilinear interpolation
-            rfld%data(i,j) = fld%data(idiv, jdiv)*(1.0_dp-ialpha)*(1.0_dp-jalpha) &
-            + fld%data(idiv+1, jdiv)*ialpha*(1.0_dp-jalpha) &
-            + fld%data(idiv, jdiv+1)*(1.0_dp-ialpha)*jalpha &
-            + fld%data(idiv+1, jdiv+1)*ialpha*jalpha
-          end if
-        end do
-      end do
-
+      ! Fourier interpolations
+      call fourier_intpl(rfld%data(1:fld%m*i_reflv, 1:fld%n*j_reflv), &
+                  fld%data(1:fld%m, 1:fld%n), i_reflv, j_reflv)
     end if
 
   end subroutine allocate_refined_field
