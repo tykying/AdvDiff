@@ -261,7 +261,7 @@ contains
 
     type(dofdat) :: dof_rsc
 
-    call allocate(dof_rsc, dof%m, dof%n)
+    call allocate(dof_rsc, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
 
     call set(dof_rsc, dof)
 
@@ -320,9 +320,11 @@ contains
     end if
     
     ! TODO: Ad-hoc 
-    dof%m = dof%psi%m
-    dof%n = dof%psi%n
-    dof%ndof = dof%m * dof%n
+    dof%m_psi = dof%psi%m
+    dof%n_psi = dof%psi%n
+    dof%m_K = dof%K11%m
+    dof%n_K = dof%K11%n
+    dof%ndof = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
     dof%SlogPost = SlogPost
     dof%occurrence = 1
 
@@ -350,19 +352,12 @@ contains
 
   end subroutine allocate_theta
   
-  subroutine convert_dof_to_theta(theta, dof, sc)
-    real(kind=dp), dimension(:), intent(out) :: theta
+  subroutine convert_dof_to_theta(theta, dof, rsc)
+    real(kind=dp), dimension(:), intent(inout) :: theta
     type(dofdat), intent(in) :: dof
-    real(kind = dp), optional, intent(in) :: sc
+    real(kind = dp), intent(in) :: rsc
 
-    real(kind = dp) :: rsc
     integer :: i, j, k
-    
-    if (present(sc)) then
-      rsc = 1.0_dp/sc
-    else
-      rsc = 1.0_dp
-    end if
     
     k = 0
     ! Psi
@@ -393,7 +388,7 @@ contains
         theta(k) = dof%K12%data(i, j) *rsc
       end do
     end do
-
+    
   end subroutine convert_dof_to_theta
   
   subroutine write_theta(dof, filename, sc, index)
@@ -404,17 +399,14 @@ contains
     
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
     real(kind=dp), dimension(:), allocatable :: theta
-    
-    call start(write_field_timer)
-
-    call allocate_theta(theta, dof)
-    
+    real(kind=dp) :: rsc
+        
     if (present(sc)) then
-      call convert_dof_to_theta(theta, dof, sc)
+      rsc = 1.0_dp/sc
     else
-      call convert_dof_to_theta(theta, dof)
+      rsc = 1.0_dp
     end if
-    
+
     if(present(index)) then
       write(lfilename, "(a,a,i0)") trim(filename), "_", index
     else
@@ -436,13 +428,14 @@ contains
     write(output_unit, "("//dp_chr//")") dof%SlogPost
     write(output_unit, "(i0)") dof%occurrence
     close(output_unit)
+    
+    allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+    call convert_dof_to_theta(theta, dof, rsc)
 
     open(unit = output_unit, file = trim(lfilename) // ".dat", &
       & status = "replace", access = "stream", action = "write")
     write(output_unit) theta
     close(output_unit)
-
-    call stop(write_field_timer)
     
     deallocate(theta)
     

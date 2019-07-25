@@ -56,7 +56,7 @@ contains
     real(kind = dp) :: end_cpu_time
 
     !assert(tmr%running)
-
+    
     call cpu_time(end_cpu_time)
     tmr%time = tmr%time + end_cpu_time - tmr%start_cpu_time
     tmr%running = .false.

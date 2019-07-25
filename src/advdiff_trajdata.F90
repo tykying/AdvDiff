@@ -15,7 +15,6 @@ module advdiff_trajdata
   public :: normalise_traj
   public :: traj2jumps, print_info
   public :: check_normalised_pos
-  public :: ij2k, k2i, k2j
   public :: read_uniform_h
 
   interface allocate
@@ -24,7 +23,7 @@ module advdiff_trajdata
   end interface allocate
 
   interface deallocate
-    module procedure deallocate_trajdat, deallocate_jumpsdat
+    module procedure deallocate_trajdat, deallocate_jumpsdat, deallocate_jumpsdat_ptr
   end interface deallocate
 
   interface eval_fldpt
@@ -34,18 +33,6 @@ module advdiff_trajdata
   interface print_info
     module procedure print_info_mesh, print_info_jumps, print_info_traj
   end interface print_info
-
-  interface ij2k
-    module procedure ij2k_mesh
-  end interface ij2k
-
-  interface k2i
-    module procedure k2i_mesh
-  end interface k2i
-
-  interface k2j
-    module procedure k2j_mesh
-  end interface k2j
 
   type jumpsdat
     integer :: njumps
@@ -64,7 +51,6 @@ module advdiff_trajdata
 
   type meshdat
     integer :: m, n, Ncell
-    integer :: m_reflv, n_reflv   ! Related to DOF in inference.F90
   end type meshdat
 
 contains
@@ -110,6 +96,17 @@ contains
 
   end subroutine allocate_jumpsdat
 
+  subroutine deallocate_jumpsdat_ptr(jumps)
+    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    integer :: cell
+    
+    do cell = 1, size(jumps,1)
+      call deallocate(jumps(cell))
+    end do
+    deallocate(jumps)
+    
+  end subroutine deallocate_jumpsdat_ptr
+  
   subroutine deallocate_jumpsdat(jumps_c)
     type(jumpsdat), intent(inout) :: jumps_c
 
@@ -121,16 +118,13 @@ contains
   end subroutine deallocate_jumpsdat
 
 
-  subroutine allocate_mesh(mesh, m, n, m_reflv, n_reflv)
+  subroutine allocate_mesh(mesh, m, n)
     type(meshdat), intent(inout) :: mesh
     integer, intent(in) :: m, n
-    integer, intent(in) :: m_reflv, n_reflv
-
-    mesh%m = m*m_reflv
-    mesh%n = n*n_reflv
-    mesh%m_reflv = m_reflv
-    mesh%n_reflv = n_reflv
-    mesh%Ncell = mesh%m * mesh%n
+    
+    mesh%m = m
+    mesh%n = n
+    mesh%Ncell = m*n
     
   end subroutine allocate_mesh
 
@@ -173,27 +167,6 @@ contains
     alpha = xm - floor(xm) - 0.5_dp
   end function alpha
 
-  pure integer function ij2k_mesh(i,j,mesh)
-    integer, intent(in) :: i, j
-    type(meshdat), intent(in) :: mesh
-
-    ij2k_mesh = (j-1)*mesh%m + i
-  end function ij2k_mesh
-
-  pure integer function k2i_mesh(k,mesh)
-    integer, intent(in) :: k
-    type(meshdat), intent(in) :: mesh
-
-    k2i_mesh = mod(k-1, mesh%m) + 1
-  end function k2i_mesh
-
-  pure integer function k2j_mesh(k,mesh)
-    integer, intent(in) :: k
-    type(meshdat), intent(in) :: mesh
-
-    k2j_mesh = (k-1)/ mesh%m + 1
-  end function k2j_mesh
-
   pure real(kind = dp) function eval_fldpt_rect(fld, mesh, k)
     type(field), intent(in) :: fld
     type(meshdat), intent(in) :: mesh
@@ -201,8 +174,8 @@ contains
 
     integer :: i, j
 
-    i = k2i(k,mesh)
-    j = k2j(k,mesh)
+    i = k2i(k,mesh%m)
+    j = k2j(k,mesh%m)
 
     ! Piecewise constant within the cell
     !eval_fldpt_rect = fld%data(i,j)
@@ -219,8 +192,8 @@ contains
     integer :: i, j, i0, j0, i1, j1
     real(kind=dp) :: alpha_x, alpha_y
 
-    i = k2i(k,mesh)
-    j = k2j(k,mesh)
+    i = k2i(k,mesh%m)
+    j = k2j(k,mesh%m)
 
     if (alpha_f(1) < 0.0_dp) then
       i0 = max(1, i-1)
@@ -292,7 +265,7 @@ contains
       do t_ind = 1, size(traj%x, 2)
         i = CellInd(traj%x(part, t_ind),mesh%m)
         j = CellInd(traj%y(part, t_ind),mesh%n)
-        cell = ij2k(i,j,mesh)
+        cell = ij2k(i,j,mesh%m)
 
         Jcell_ptr(part, t_ind) = cell
         njumps_ptr(cell) = njumps_ptr(cell) + 1
@@ -364,8 +337,6 @@ contains
     write(6, "(a,"//int_chr//",a,"//int_chr//")") &
       "|  mesh%m, n", mesh%m, " , ", mesh%n
     write(6, "(a,"//int_chr//")") "|  mesh%Ncell", mesh%Ncell
-    write(6, "(a,"//int_chr//",a,"//int_chr//")") &
-      "|  mesh%m_reflv, n_reflv", mesh%m_reflv, " , ", mesh%n_reflv
   end subroutine print_info_mesh
 
   subroutine print_info_traj(traj)

@@ -85,8 +85,10 @@ for IND = 1:nIND
     end
 end
 
-for DS_rate = [4096, 1]
-    for PriorID = [18, 0, 17]
+% for DS_rate = [4096, 1]
+%     for PriorID = [18, 0, 17]
+for DS_rate = [4096]
+    for PriorID = [0]
     %% Downsample data
     DataDS = cell(size(DataX));
     
@@ -106,7 +108,7 @@ for DS_rate = [4096, 1]
     for IND = 1:nIND
         X = DataDS{IND};
         
-        nx = 80;
+        nx = 48;
         % Set up ghost layer
         gl = 1;
         QW = zeros(1, nx+ 2*gl);  % q weight (including ghost layer)
@@ -143,7 +145,7 @@ for DS_rate = [4096, 1]
     
     %% Unittest for interpolation operator
     % IND = 1
-    % q = 1:80;
+    % q = 1:48;
     % q = [q(end), q, q(1)];
     % tic
     % for k = 1:1
@@ -186,9 +188,9 @@ for DS_rate = [4096, 1]
     compute_logPrior = @(theta_Canon) compute_logPrior_ID(theta_Canon, PriorID);
     
     % Sampling process
-    for k = 1:5
+    for k = 1:3
         filepath = "./output/";
-        filename = sprintf("MCMC_Gauss_DOF%i_IND%i_dx80_DS%i_Prior%i_%i.mat", nDOF, nIND, DS_rate, PriorID, k);
+        filename = sprintf("MCMC_Gauss_DOF%i_IND%i_dx48_DS%i_Prior%i_%i.mat", nDOF, nIND, DS_rate, PriorID, k);
         filename = strcat(filepath, filename)
         
         rng(1039*k)
@@ -559,7 +561,7 @@ end
 
 %% Evaluate Likelihood
 function [loglik, q, xmid] = eval_loglikelihood_Bin(ind0, gamma0, K_fn, q0_fn)
-nx = 80;
+nx = 48;
 % n = 256;
 nstep = 32*nx;
 
@@ -581,7 +583,7 @@ end
 
 % Old, inefficient method
 function [loglik, q, xmid] = eval_loglikelihood(X, K_fn, q0_fn)
-nx = 80;
+nx = 48;
 % n = 256;
 nstep = 32*nx;
 

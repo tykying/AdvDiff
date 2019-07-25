@@ -51,8 +51,8 @@ module advdiff_field
 
   interface allocate
     module procedure allocate_field, allocate_uv, &
-                     allocate_Kflux, allocate_KfluxE, &
-                     allocate_refined_field
+                     allocate_Kflux, allocate_KfluxE !, &
+!                      allocate_refined_field
   end interface allocate
 
   interface deallocate
@@ -93,7 +93,7 @@ contains
     integer, optional, intent(in) :: type_id
 
     integer :: gl = 0
-    integer :: tid = 0
+    integer :: tid = 2  ! Default = 2: centre-based
 
 
     if (present(glayer)) then
@@ -109,15 +109,19 @@ contains
     fld%glayer = gl
     fld%type_id = tid
 
-    if (fld%type_id .eq. 0) then
+    if (fld%type_id .eq. 2) then
       ! Defined at cell centre
       allocate(fld%data(fld%m+2*gl, fld%n+2*gl))
     elseif (fld%type_id .eq. 1) then
       ! Defined at corner
       allocate(fld%data(fld%m+1+2*gl, fld%n+1+2*gl))
-    elseif (fld%type_id .eq. 2) then
-      ! Defined at corner, without right and top boundaries for Fourier transform
-      allocate(fld%data(fld%m+2*gl, fld%n+2*gl))
+    elseif (fld%type_id .lt. 0) then
+      ! DOF type: no ghost layer
+      if (gl .ne. 0) &
+        call abort_handle("Ghost layer for DOF should be zero", __FILE__, __LINE__)
+      allocate(fld%data(fld%m, fld%n))
+    elseif (fld%type_id .eq. 0) then
+       call abort_handle("fld%type_id = 0: should correct", __FILE__, __LINE__)
     end if
 
     if(len_trim(name) > field_name_len) then
@@ -138,21 +142,25 @@ contains
   subroutine fourier_intpl(out, in, Mx, My)
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
-
+    
     real(kind=dp), dimension(:, :), intent(out) :: out
     real(kind=dp), dimension(:, :), intent(in) :: in
     integer, intent(in) :: Mx, My  ! Factor of scaling up
-  
+    
     type(C_PTR) :: plan
     complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: Zk, Zk_pad
     real(kind=dp), dimension(:, :), allocatable :: in_copy
     
     integer :: i, j
     
-    if (size(out, 1) .ne. size(in, 1) * Mx) &
+    if (size(out, 1) .ne. size(in, 1) * Mx) then
+      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
       call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
-    if (size(out, 2) .ne. size(in, 2) * My) &
+    end if
+    if (size(out, 2) .ne. size(in, 2) * My) then
+      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
       call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
+    end if
     
     allocate(in_copy(size(in,1), size(in,2)))
     allocate(Zk(size(in,1)/2+1, size(in,2)))
@@ -192,7 +200,7 @@ contains
         Zk_pad(i, j) = 0.0_dp
       end do
     end do
-
+    
     ! Halve the N/2+1 term
     j = size(Zk, 2)/2 + 1
     do i = 1, size(Zk, 1)
@@ -204,12 +212,13 @@ contains
     plan = fftw_plan_dft_c2r_2d(size(out,2),size(out,1), Zk_pad, out, FFTW_ESTIMATE)
     call fftw_execute_dft_c2r(plan, Zk_pad, out)
     call fftw_destroy_plan(plan)
-
+    
     out = out/real(size(in,1)*size(in,2),kind=dp)
     
     deallocate(Zk)
     deallocate(Zk_pad)
     deallocate(in_copy)
+    call fftw_cleanup()
     
   end subroutine fourier_intpl
 
@@ -227,10 +236,16 @@ contains
     
     integer :: i, j
     
-    if (size(out, 1) .ne. size(in, 1) * Mx) &
+    if (size(out, 1) .ne. size(in, 1) * Mx) then
+       write(6, *) "Mx = ", Mx
+       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
       call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
-    if (size(out, 2) .ne. size(in, 2) * My) &
+    end if
+    if (size(out, 2) .ne. size(in, 2) * My) then
+      write(6, *) "My = ", My
+      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
       call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+    end if
     
     allocate(Bpq(size(in,1), size(in,2)))
     allocate(in_copy(size(in,1), size(in,2)))
@@ -259,41 +274,74 @@ contains
     call fftw_execute_r2r(plan, Bpq_pad, out)
     call fftw_destroy_plan(plan)
 
-    out = out/(4*size(in,1)*size(in,2))
+    out = out/real(4*size(in,1)*size(in,2), kind=dp)
     
     deallocate(Bpq)
     deallocate(Bpq_pad)
     deallocate(in_copy)
-    
+    call fftw_cleanup()
+
   end subroutine cosine_intpl
   
-  
-  subroutine allocate_refined_field(rfld, fld, i_reflv, j_reflv)
-    type(field), intent(out) :: rfld
-    type(field), intent(in) :: fld
-    integer, intent(in) :: i_reflv, j_reflv
-
-    call allocate(rfld, fld%m*i_reflv, fld%n*j_reflv, "r"//trim(fld%name), fld%glayer, fld%type_id)
-
-    if (fld%type_id .eq. 0) then
-      ! Cosine interpolations
-      call cosine_intpl(rfld%data, fld%data, i_reflv, j_reflv)
-      
-    elseif (fld%type_id .eq. 1) then
-      ! Fourier interpolations
-      call fourier_intpl(rfld%data(1:fld%m*i_reflv, 1:fld%n*j_reflv), &
-                  fld%data(1:fld%m, 1:fld%n), i_reflv, j_reflv)
+  subroutine bilinear_intpl(out, in, Mx, My)
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+    
+    integer :: i, j, idiv, jdiv, imod, jmod
+    real(kind=dp) :: ialpha, jalpha
+    
+    if ((size(out,1)-1) .ne. (size(in,1)-1) * Mx) then
+       write(6, *) "Mx = ", Mx
+       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
+      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
     end if
+    if ((size(out,2)-1) .ne. (size(in,2)-1) * My) then
+      write(6, *) "My = ", My
+      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
+      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+    end if
+    
+    ! Bilinear interpolations: for K
+    ! Assumed type_id = 1 (at corners)
+    do j = 1, size(out, 2)
+      do i = 1, size(out, 1)
+        idiv = (i-1)/Mx+1
+        jdiv = (j-1)/My+1
+        imod = mod(i-1, Mx)
+        jmod = mod(j-1, My)
+        ialpha = real(imod, kind=dp)/real(Mx, kind=dp)
+        jalpha = real(jmod, kind=dp)/real(My, kind=dp)
 
-  end subroutine allocate_refined_field
+        if ((imod .eq. 0) .and. (jmod .eq. 0)) then
+          ! Refined and coarse grid point
+          ! No interpolations
+          out(i,j) = in(idiv, jdiv)
+        elseif (imod .eq. 0) then
+          ! Grid point with x-coordinate aligned
+          ! 1D interpolation
+          out(i,j) = in(idiv, jdiv)*(1.0_dp-jalpha) &
+                          + in(idiv, jdiv+1)*jalpha
+        elseif (jmod .eq. 0) then
+          ! Grid point with y-coordinate aligned
+          ! 1D interpolation
+          out(i,j) = in(idiv, jdiv)*(1.0_dp-ialpha) &
+                          + in(idiv+1, jdiv)*ialpha
+        else
+          ! Bilinear interpolation
+          out(i,j) = in(idiv, jdiv)*(1.0_dp-ialpha)*(1.0_dp-jalpha) &
+                     + in(idiv+1, jdiv)*ialpha*(1.0_dp-jalpha) &
+                     + in(idiv, jdiv+1)*(1.0_dp-ialpha)*jalpha &
+                     + in(idiv+1, jdiv+1)*ialpha*jalpha
+        end if
+      end do
+    end do
+
+  end subroutine bilinear_intpl
 
   subroutine allocate_uv(uv_fld, psi)
     type(uv_signed), intent(out) :: uv_fld
     type(field), intent(in) :: psi
-
-    real(kind = dp), dimension(:, :), pointer :: lup, lum, lvp, lvm
-    real(kind = dp), dimension(:, :), pointer :: lu_abs, lv_abs
-    integer, dimension(:, :), pointer :: lu_sgn, lv_sgn
     integer :: i, j
 
     if (psi%type_id .ne. 1) &
@@ -307,49 +355,36 @@ contains
     allocate(uv_fld%v_sgn(psi%m, psi%n+1))
     allocate(uv_fld%u_abs(psi%m+1, psi%n))
     allocate(uv_fld%v_abs(psi%m, psi%n+1))
-
-
-    ! Assign values to u and v
-    lup => uv_fld%up
-    lum => uv_fld%um
-    lvp => uv_fld%vp
-    lvm => uv_fld%vm
-
-    lu_sgn => uv_fld%u_sgn
-    lv_sgn => uv_fld%v_sgn
-    lu_abs => uv_fld%u_abs
-    lv_abs => uv_fld%v_abs
-
     
     ! Temporary values
-    call psi_to_uv(lup, lvp, psi)
+    call psi_to_uv(uv_fld%up, uv_fld%vp, psi)
 
     ! maxmin u and v wrt 0
-    do j = 1, size(lup, 2)
-      do i = 1, size(lup, 1)
-        if (dabs(lup(i,j)) > 1e-14) then
-          lu_sgn(i,j) = int(sign(1.0_dp, lup(i,j)))
+    do j = 1, size(uv_fld%up, 2)
+      do i = 1, size(uv_fld%up, 1)
+        if (dabs(uv_fld%up(i,j)) > 1e-14) then
+          uv_fld%u_sgn(i,j) = int(sign(1.0_dp, uv_fld%up(i,j)))
         else
-          lu_sgn(i,j) = 0
+          uv_fld%u_sgn(i,j) = 0
         end if
 
-        lum(i,j) = min(lup(i, j), 0.0_dp)
-        lup(i,j) = max(lup(i, j), 0.0_dp)
-        lu_abs(i,j) = lup(i,j) - lum(i,j)
+        uv_fld%um(i,j) = min(uv_fld%up(i, j), 0.0_dp)
+        uv_fld%up(i,j) = max(uv_fld%up(i, j), 0.0_dp)
+        uv_fld%u_abs(i,j) = uv_fld%up(i,j) - uv_fld%um(i,j)
       end do
     end do
 
-    do j = 1, size(lvp, 2)
-      do i = 1, size(lvp, 1)
-        if (dabs(lvp(i,j)) > 1e-14) then
-          lv_sgn(i,j) = int(sign(1.0_dp, lvp(i,j)))
+    do j = 1, size(uv_fld%vp, 2)
+      do i = 1, size(uv_fld%vp, 1)
+        if (dabs(uv_fld%vp(i,j)) > 1e-14) then
+          uv_fld%v_sgn(i,j) = int(sign(1.0_dp, uv_fld%vp(i,j)))
         else
-          lv_sgn(i,j) = 0
+          uv_fld%v_sgn(i,j) = 0
         end if
 
-        lvm(i,j) = min(lvp(i, j), 0.0_dp)
-        lvp(i,j) = max(lvp(i, j), 0.0_dp)
-        lv_abs(i,j) = lvp(i,j) - lvm(i,j)
+        uv_fld%vm(i,j) = min(uv_fld%vp(i, j), 0.0_dp)
+        uv_fld%vp(i,j) = max(uv_fld%vp(i, j), 0.0_dp)
+        uv_fld%v_abs(i,j) = uv_fld%vp(i,j) - uv_fld%vm(i,j)
       end do
     end do
 
@@ -391,8 +426,8 @@ contains
     K22e => K_e%K22e
 
     ! K: cell-centred
-    if ( (K11%type_id .eq. 0) .and. &
-         (K22%type_id .eq. 0) .and. (K12%type_id .eq. 0) ) then
+    if ( (K11%type_id .eq. 2) .and. &
+         (K22%type_id .eq. 2) .and. (K12%type_id .eq. 2) ) then
       ! For K11 and K12
       do j = 1, n
         do i = 2, m
@@ -559,16 +594,12 @@ contains
     type(field), intent(in) :: psi_fld
     integer :: i, j
 
-    real(kind = dp), dimension(:, :), pointer :: lpsi_fld
-
-    lpsi_fld => psi_fld%data
-
     if (psi_fld%type_id .ne. 1) &
       call abort_handle("psi_to_uv: psi is not at corners", __FILE__, __LINE__)
-
+      
     do j = 1, psi_fld%n
       do i = 1, psi_fld%m+1
-        u(i, j) = lpsi_fld(i, j) - lpsi_fld(i, j+1)
+        u(i, j) = psi_fld%data(i, j) - psi_fld%data(i, j+1)
         
         if (dabs(u(i, j)) < 1e-14) then
           u(i, j) = 0.0_dp
@@ -578,7 +609,7 @@ contains
 
     do j = 1, psi_fld%n+1
       do i = 1, psi_fld%m
-        v(i, j) = lpsi_fld(i+1, j) - lpsi_fld(i, j)
+        v(i, j) = psi_fld%data(i+1, j) - psi_fld%data(i, j)
         
         if (dabs(v(i, j)) < 1e-14) then
           v(i, j) = 0.0_dp
@@ -599,15 +630,6 @@ contains
     lfld => fld%data
     gl = fld%glayer
 
-!     ! Dimension check, assumed ghost layer exist
-!     if ((size(d_fld,1) .ne. fld%m+1) .or. (size(d_fld,2) .ne. fld%n)) then
-!       call abort_handle("dx_field: Invalid size", __FILE__, __LINE__)
-!     end if
-! 
-!     if (gl .le. 0) then
-!       call abort_handle("dx_field: Need to impose ghost layer", __FILE__, __LINE__)
-!     end if
-
     do j = 1, fld%n
       do i = 1, (fld%m+1)
         d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i+gl-1, j+gl)
@@ -625,15 +647,6 @@ contains
 
     lfld => fld%data
     gl = fld%glayer
-
-!     ! Dimension check
-!     if ((size(d_fld,1) .ne. fld%m) .or. (size(d_fld,2) .ne. fld%n+1)) then
-!       call abort_handle("dy_field: Invalid size", __FILE__, __LINE__)
-!     end if
-! 
-!     if (gl .le. 0) then
-!       call abort_handle("dy_field: Need to impose ghost layer", __FILE__, __LINE__)
-!     end if
 
     do j = 1, (fld%n+1)
       do i = 1, fld%m
@@ -1118,6 +1131,8 @@ contains
 
     write(6, "(a)") ""
     write(6, "(a,a)") " Display info: ", trim(fld%name)
+    write(6, "(a,i0)") "|  type_id: ", fld%type_id
+    write(6, "(a,i0,a,i0)") "|  size(fld%data, 1), size(fld%data, 2): ", size(fld%data, 1), ", ", size(fld%data, 2)
     write(6, "(a,i0,a,i0,a,i0)") "|  m, n, dof: ", fld%m, ", ", fld%n, ", ", fld%m*fld%n
     write(6, "(a,i0)") "|  ghost layer: ", fld%glayer
     write(6, "(a,i0,a,i0)") "|  Negative dof = ", count_neg(fld), " out of ", fld%m*fld%n

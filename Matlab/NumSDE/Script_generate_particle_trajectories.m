@@ -48,6 +48,7 @@ t_range = [t_0, t_1];
 %% Choose configuration
 % kappa_Profile = 'TG_iso';
 kappa_Profile = 'sinusoidal';
+kappa_Profile = 'aniso';
 %kappa_Profile = 'const';
 veloc_Profile = 'TTG';
 RunProfile = ['K_', kappa_Profile];

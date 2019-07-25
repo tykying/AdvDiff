@@ -6,8 +6,33 @@ module advdiff_complib
   public :: sqrt_matrix, init_random_seed, randn
   public :: KCarte_to_KCanon, KCanon_to_KCarte
   public :: unfold_matrix
+  public :: ij2k, k2i, k2j
   
 contains
+  pure integer function ij2k(i,j,m)
+    integer, intent(in) :: i, j
+    integer, intent(in) :: m  ! dim = [m, n]
+    ! n is irrelevant
+
+    ij2k = (j-1)*m + i
+  end function ij2k
+  
+  pure integer function k2i(k,m)
+    integer, intent(in) :: k
+    integer, intent(in) :: m  ! dim = [m, n]
+    ! n is irrelevant
+
+    k2i = mod(k-1, m) + 1
+  end function k2i
+  
+  pure integer function k2j(k,m)
+    integer, intent(in) :: k
+    integer, intent(in) :: m  ! dim = [m, n]
+    ! n is irrelevant
+
+    k2j = (k-1)/ m + 1
+  end function k2j
+  
   ! Random Sample from normal (Gaussian) distribution, Box-muller transform
   ! Source: https://sukhbinder.wordpress.com/fortran-random-number-generation/
    real(kind = dp) function randn()

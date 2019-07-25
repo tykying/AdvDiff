@@ -18,7 +18,8 @@ module advdiff_inference
   public :: eval_INDk_loglik
 
   type dofdat
-    integer :: m, n
+    integer :: m_psi, n_psi
+    integer :: m_K, n_K
     integer :: ndof
     type(field) :: psi, K11, K22, K12
     integer :: occurrence
@@ -33,7 +34,7 @@ module advdiff_inference
   type(timer), save :: loglik_timer, intpl_timer, reffld_timer
 
   interface allocate
-    module procedure allocate_dof, allocate_rdof, allocate_IndFn
+    module procedure allocate_dof, allocate_IndFn, allocate_dof_solver
   end interface allocate
 
   interface deallocate
@@ -43,45 +44,33 @@ module advdiff_inference
   interface set
     module procedure set_dof
   end interface set
-
-  interface ij2k
-    module procedure ij2k_dof
-  end interface ij2k
-
-  interface k2i
-    module procedure k2i_dof
-  end interface k2i
-
-  interface k2j
-    module procedure k2j_dof
-  end interface k2j
   
   interface print_info
     module procedure print_info_inference, print_info_rescaled, print_info_IndFn
   end interface print_info
 
 contains
-  subroutine allocate_dof(dof, m, n)
+  subroutine allocate_dof(dof, m_psi, n_psi, m_K, n_K)
     type(dofdat), intent(inout) :: dof
-    integer, intent(in) :: m, n
+    integer, intent(in) :: m_psi, n_psi, m_K, n_K
 
-    integer :: type_id ! 1-> corner; 0-> centres
+    integer :: type_id ! 1= corner; 2= centres; x-1 = DOF
     
-    dof%m = m
-    dof%n = n
-    dof%ndof = m*n
+    dof%m_psi = m_psi
+    dof%n_psi = n_psi
+    dof%m_K = m_K
+    dof%n_K = n_K
+    dof%ndof = m_psi*n_psi + m_K*n_K  ! Truth: m_psi*n_psi + 3(m_K*n_K)
 
-    ! Defined at corners
-    type_id = 1
-    call allocate(dof%psi, m, n, 'psi', glayer=0, type_id=type_id)
+    ! Defined at corners + DOF -> -1
+    type_id = -1  ! NOT including the boundaries (assumed zeros, hence not DOF)
+    call allocate(dof%psi, m_psi, n_psi, 'psi', glayer=0, type_id=type_id)
 
-    ! Defined at cell centre
-    type_id = 0
-!     write(6, *) "- Now switch to Kcorner -"
-!     type_id = 1
-    call allocate(dof%K11, m, n, 'K11', glayer=0, type_id=type_id)
-    call allocate(dof%K22, m, n, 'K22', glayer=0, type_id=type_id)
-    call allocate(dof%K12, m, n, 'K12', glayer=0, type_id=type_id)
+    ! Defined at cell centre + DOF -> -2
+    type_id = -2
+    call allocate(dof%K11, m_K, n_K, 'K11', glayer=0, type_id=type_id)
+    call allocate(dof%K22, m_K, n_K, 'K22', glayer=0, type_id=type_id)
+    call allocate(dof%K12, m_K, n_K, 'K12', glayer=0, type_id=type_id)
 
     dof%occurrence = 0
     dof%SlogPost = 0.0_dp
@@ -133,27 +122,6 @@ contains
     call set(dof%K12, dof_in%K12)
 
   end subroutine set_dof
-
-  pure integer function ij2k_dof(i,j,dof)
-    integer, intent(in) :: i, j
-    type(dofdat), intent(in) :: dof
-
-    ij2k_dof = (j-1)*dof%m + i
-  end function ij2k_dof
-
-  pure integer function k2i_dof(k,dof)
-    integer, intent(in) :: k
-    type(dofdat), intent(in) :: dof
-
-    k2i_dof = mod(k-1, dof%m) + 1
-  end function k2i_dof
-
-  pure integer function k2j_dof(k,dof)
-    integer, intent(in) :: k
-    type(dofdat), intent(in) :: dof
-
-    k2j_dof = (k-1)/ dof%m + 1
-  end function k2j_dof
   
   subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
     real(kind=dp), dimension(:), intent(out) :: loglik
@@ -166,17 +134,21 @@ contains
 
     integer :: INDk
 
-    type(dofdat) :: rdof  ! Refined dof for computation
-    call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
+    type(dofdat) :: dof_solver  ! Refined dof for solver
+    
+    call allocate(dof_solver, mesh)
+    call intpl_dof_solver(dof_solver, dof, mesh)
 
-    !! Control number of thread by "num_threads(32)" after "DO"
-    !$OMP PARALLEL DO
+    !! Control number of thread = 32 by 
+    !! "!$OMP PARALLEL DO num_threads(32)"
+    
+    !$OMP PARALLEL DO num_threads(4)
     do INDk = 1, IndFn%nIND
-      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, rdof, h, nts)
+      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts)
     end do
     !$OMP END PARALLEL DO
     
-    call deallocate(rdof)
+    call deallocate(dof_solver)
     
   end subroutine evaluate_loglik_OMP
   
@@ -210,7 +182,7 @@ contains
     do j = j0, j1
       do i = i0, i1
         klist_len = klist_len + 1
-        klist(klist_len) = ij2k(i,j,mesh)
+        klist(klist_len) = ij2k(i,j,mesh%m)
       end do
     end do
     
@@ -228,18 +200,18 @@ contains
     call zeros(q)
     do i = 1, nzc
       k_i = klist(i)
-      call indicator_field(q, k2i(k_i, mesh), k2j(k_i, mesh))
+      call indicator_field(q, k2i(k_i, mesh%m), k2j(k_i, mesh%m))
     end do
     call scale(q, 1.0_dp/real(nzc, kind=dp))
   
   end subroutine initialise_q
   
-  real(kind=dp) function eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof, h, nts)
+  real(kind=dp) function eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts)
     integer, intent(in) :: INDk
     type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
     type(IndFndat), intent(in) :: IndFn
     type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof
+    type(dofdat), intent(in) :: dof_solver
     real(kind=dp), intent(in) :: h
     integer, intent(in) :: nts
     integer, dimension(:), allocatable :: klist
@@ -255,14 +227,22 @@ contains
 
     ! Find out the cells corresponding to the indicator function
     call INDk_to_klist(klist, INDk, IndFn, mesh)
-    call allocate(q, dof%m, dof%n, 'q', glayer=1,type_id=0)
+    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
     
     ! Solve FK equation
     call initialise_q(q, klist, mesh)
-    call advdiff_q(q, dof%psi, dof%K11, dof%K22, dof%K12, h, nts)
+
+!     call print_array(q%data, "q0%data")
+    call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
 !       if (.not. is_nneg(q%data)) then
 !         write(6, "(a,"//dp_chr//")") "Non-negative q!: ", minval(q%data)
 !       end if
+
+!     call print_array(dof_solver%psi%data, "dof_solver%psi")
+!     call print_array(dof_solver%K11%data, "dof_solver%K11")
+!     call print_array(dof_solver%K22%data, "dof_solver%K22")
+!     call print_array(dof_solver%K12%data, "dof_solver%K12")
+!     call print_array(q%data, "q%data")
 
     ! Evaluate likelihood
     call start(intpl_timer)
@@ -284,21 +264,75 @@ contains
     call stop(loglik_timer)
 
   end function eval_INDk_loglik
+  
+  subroutine allocate_dof_solver(dof_solver, mesh)
+    type(dofdat), intent(out) :: dof_solver
+    type(meshdat), intent(in) :: mesh
 
-  subroutine allocate_rdof(rdof, dof, m_reflv, n_reflv)
-    type(dofdat), intent(out) :: rdof
+    integer :: type_id ! 1= corner; 2= centres; *-1 = DOF
+    
+    dof_solver%m_psi = mesh%m
+    dof_solver%n_psi = mesh%n
+    dof_solver%m_K = mesh%m
+    dof_solver%n_K = mesh%n
+    dof_solver%ndof = 0
+
+    ! Defined at corners
+    type_id = 1
+    call allocate(dof_solver%psi, mesh%m, mesh%n, 'psi', glayer=0, type_id=type_id)
+
+    ! Defined at cell centre
+    type_id = 2
+    call allocate(dof_solver%K11, mesh%m, mesh%n, 'K11', glayer=0, type_id=type_id)
+    call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', glayer=0, type_id=type_id)
+    call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', glayer=0, type_id=type_id)
+
+    dof_solver%occurrence = 0
+    dof_solver%SlogPost = 0.0_dp
+    
+  end subroutine allocate_dof_solver
+  
+  subroutine intpl_dof_solver(dof_solver, dof, mesh)
+    ! Interpolate from DOF to fields for the solver
+    type(dofdat), intent(inout) :: dof_solver  ! Field to use for solver
     type(dofdat), intent(in) :: dof
-    integer, intent(in) :: m_reflv, n_reflv
+    type(meshdat), intent(in) :: mesh
     
-    rdof%m = dof%m * m_reflv
-    rdof%n = dof%n * n_reflv
+    integer :: m, n, Mx, My
+    real(kind=dp), dimension(:, :), allocatable :: fldij
     
-    call allocate(rdof%psi, dof%psi, m_reflv, n_reflv)
-    call allocate(rdof%K11, dof%K11, m_reflv, n_reflv)
-    call allocate(rdof%K22, dof%K22, m_reflv, n_reflv)
-    call allocate(rdof%K12, dof%K12, m_reflv, n_reflv)
+    ! fldij(i, j) = field(x_i, y_j)
+    ! DOF: can be coarse field(x_i, y_j) or Fourier coefficients
+    ! dof_to_fldij: an interface from DOF to fld(i,j)
+    
+    ! Streamfunction: psi:
+    ! N.B. DOF%psi = non-bondary values, assumed boundary value = 0
+    m = dof%psi%m
+    n = dof%psi%n
 
-  end subroutine allocate_rdof
+    allocate(fldij(m+1, n+1))
+    fldij = 0.0_dp  ! Boundary condition for stream function
+    fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+    
+    Mx = mesh%m/(m+1)
+    My = mesh%n/(n+1)
+    ! Assumed periodic(= 0) at first and final row/column
+    call fourier_intpl(dof_solver%psi%data(1:mesh%m, 1:mesh%n), fldij, Mx, My)
+    dof_solver%psi%data(mesh%m+1, :) = dof_solver%psi%data(1, :)  ! Impose periodicity
+    dof_solver%psi%data(:, mesh%n+1) = dof_solver%psi%data(:, 1)  ! Impose periodicity
+
+    deallocate(fldij)
+    
+    ! Diffusivity
+    ! N.B. DOF%psi = Cartesian grid at cell centre
+    Mx = mesh%m/dof%K11%m
+    My = mesh%n/dof%K11%n
+    
+    call cosine_intpl(dof_solver%K11%data, dof%K11%data, Mx, My)
+    call cosine_intpl(dof_solver%K22%data, dof%K22%data, Mx, My)
+    call cosine_intpl(dof_solver%K12%data, dof%K12%data, Mx, My)
+    
+  end subroutine intpl_dof_solver
 
   pure logical function is_nneg(data)
     real(kind=dp), dimension(:, :), intent(in) :: data
@@ -319,10 +353,21 @@ contains
     type(dofdat), intent(inout) :: dof
     integer, intent(in) :: dof_id
     type(dofdat), intent(in) :: dof_SSD
-     
-    call propose_dof_K(dof, dof_id, dof_SSD)
-    call propose_dof_psi(dof, dof%ndof-dof_id+1, dof_SSD)
-    call imposeBC_cornerpsi(dof)
+    
+    integer :: K_id, psi_id
+
+    call abort_handle("TODO: Non overlapping DOF in K and psi", __FILE__, __LINE__)
+    
+    if (dof_id .le. dof%m_psi*dof%n_psi) then
+      K_id = dof_id
+      psi_id = dof%ndof - dof_id + 1
+    else
+      K_id = 1
+      psi_id = dof_id
+    end if
+    
+    call propose_dof_K(dof, K_id, dof_SSD)
+    call propose_dof_psi(dof, psi_id, dof_SSD)
     
   end subroutine propose_dof
   
@@ -335,13 +380,12 @@ contains
     
     !write(6, *) "propose_dof: Proposing two changes at a time"
     if (mod(iter, 2) .eq. 0) then
-      do dof_id = 1, dof%ndof
+      do dof_id = 1, dof%m_K*dof%n_K
         call propose_dof_K(dof, dof_id, dof_SSD)
       end do
     else
-      do dof_id = 1, dof%ndof
+      do dof_id = 1, dof%m_psi*dof%n_psi
         call propose_dof_psi(dof, dof_id, dof_SSD)
-        call imposeBC_cornerpsi(dof)
       end do
     end if
   
@@ -355,11 +399,11 @@ contains
     integer :: i0, j0, i, j
     real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
 
-    i0 = k2i(dof_id, dof)
-    j0 = k2j(dof_id, dof)
+    i0 = k2i(dof_id, dof%m_K)
+    j0 = k2j(dof_id, dof%m_K)
 
-    if ( (dof%K11%type_id .eq. 0) .and. &
-      (dof%K22%type_id .eq. 0) .and. (dof%K12%type_id .eq. 0) ) then
+    if ( (dof%K11%type_id .eq. -2) .and. &
+      (dof%K22%type_id .eq. -2) .and. (dof%K12%type_id .eq. -2) ) then
       ! K: defined at cell-centres
       Kxx = dof%K11%data(i0,j0)
       Kyy = dof%K22%data(i0,j0)
@@ -372,47 +416,18 @@ contains
       sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i0,j0)*randn() )
       phi_K = phi_K + dof_SSD%K12%data(i0,j0)*randn()
 
-      ! TODO: delete Adhoc
-      !sigma2_sq = sigma1_sq
+      !! TODO: delete Adhoc
       !phi_K = 0.0_dp
-      ! TODO: delete Adhoc
+      !! TODO: delete Adhoc
 
       call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
 
       dof%K11%data(i0,j0) = Kxx
       dof%K22%data(i0,j0) = Kyy
       dof%K12%data(i0,j0) = Kxy
-      
-    elseif ( (dof%K11%type_id .eq. 1) .and. &
-      (dof%K22%type_id .eq. 1) .and. (dof%K12%type_id .eq. 1) ) then
-      ! K: defined at corners
-      do j = j0, j0+1
-      do i = i0, i0+1
-        Kxx = dof%K11%data(i,j)
-        Kyy = dof%K22%data(i,j)
-        Kxy = dof%K12%data(i,j)
-
-        call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
-
-        ! Perturbation
-        sigma1_sq = dabs(sigma1_sq + dof_SSD%K11%data(i,j)*randn() )
-        sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i,j)*randn() )
-        phi_K = phi_K + dof_SSD%K12%data(i,j)*randn()
-
-        call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
-
-        dof%K11%data(i,j) = Kxx
-        dof%K22%data(i,j) = Kyy
-        dof%K12%data(i,j) = Kxy
-      end do
-      end do
-      
-      ! Impose boundary condition
-      !call imposeBC_cornerK(dof)
     else
       call abort_handle("Invalid type_id for K", __FILE__, __LINE__)
     end if
-
 
   end subroutine propose_dof_K
 
@@ -423,36 +438,16 @@ contains
 
     integer :: i0, j0
 
-    i0 = k2i(dof_id, dof)
-    j0 = k2j(dof_id, dof)
+    i0 = k2i(dof_id, dof%m_psi)
+    j0 = k2j(dof_id, dof%m_psi)
     
     ! Fourier basis
-    if (dof%psi%type_id .ne. 1) &
+    if (dof%psi%type_id .ne. -1) &
       call abort_handle("Invalid type_id for psi", __FILE__, __LINE__)
     
     dof%psi%data(i0,j0) = dof%psi%data(i0,j0) + dof_SSD%psi%data(i0,j0)*randn()
     
   end subroutine propose_dof_psi
-
-  subroutine imposeBC_cornerpsi(dof)
-    type(dofdat), intent(inout) :: dof
-
-    integer :: i, j, mp1, np1
-
-    mp1 = size(dof%psi%data, 1)
-    np1 = size(dof%psi%data, 2)
-
-    do j = 1, np1
-      dof%psi%data(1, j) = 0.0_dp
-      dof%psi%data(mp1, j) = 0.0_dp
-    end do
-
-    do i = 1, mp1
-      dof%psi%data(i, 1) = 0.0_dp
-      dof%psi%data(i, np1) = 0.0_dp
-    end do
-
-  end subroutine imposeBC_cornerpsi
 
   subroutine reset_inference_timers()
     call reset(loglik_timer)
@@ -484,14 +479,16 @@ contains
     write(6, "(a)") ""
     write(6, "(a)") " Inference info: "
     write(6, "(a,"//int_chr//",a,"//int_chr//")") & 
-      "|  dof%m, n", dof%m, " , ", dof%n
+      "|  dof%m_psi, n_psi", dof%m_psi, " , ", dof%n_psi
+    write(6, "(a,"//int_chr//",a,"//int_chr//")") & 
+      "|  dof%m_K, n_K", dof%m_K, " , ", dof%n_K
     write(6, "(a,"//int_chr//")") "|  dof%ndof", dof%ndof
-    write(6, "(a)") "| [type_id =0 -> centre; =1 -> corner]"
+    write(6, "(a)") "| [type_id =2 -> centre; =1 -> corner]"
     write(6, "(a,"//int_chr//")") "|  psi%type_id", dof%psi%type_id
     write(6, "(a,"//int_chr//")") "|  K11%type_id", dof%K11%type_id
     write(6, "(a,"//int_chr//")") "|  K22%type_id", dof%K22%type_id
-    write(6, "(a,"//int_chr//")") "|  K12%type_id", dof%K12%type_id
-    
+    write(6, "(a,"//int_chr//",a,"//int_chr//")") "| dof%occurrence", dof%occurrence
+    write(6, "(a,"//sp_chr//")") "|  dof%SlogPost", dof%SlogPost
     
     FLUSH(6)
   end subroutine print_info_inference

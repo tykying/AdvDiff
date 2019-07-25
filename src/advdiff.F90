@@ -19,12 +19,12 @@ contains
 
   subroutine unittest()
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
-    call unittest_comptools()
-    call unittest_trajdata()
-    call unittest_solver_properties()
-    call unittest_fftw()
-    call unittest_solver_timing()
-    call unittest_IO()
+    !call unittest_comptools()
+    !call unittest_trajdata()
+    !call unittest_solver_properties()
+    !call unittest_fftw()
+    !call unittest_solver_timing()
+    !call unittest_IO()
     !call unittest_2DLik()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
@@ -127,7 +127,7 @@ contains
     m = 64
     n = 32
 
-    call allocate(mesh, m, n, 1, 1)
+    call allocate(mesh, m, n)
     call print_info(mesh)
 
     call allocate(jumps, mesh)
@@ -200,7 +200,7 @@ contains
     n = m
     
     ! Test calculation of gradient q
-    call allocate(q, m, n, 'q', glayer=1, type_id=0)
+    call allocate(q, m, n, 'q', glayer=1, type_id=2)
     allocate(dqx(q%m+1, q%n))
     allocate(dqy(q%m, q%n+1))
 
@@ -252,9 +252,9 @@ contains
     call deallocate(psi)
     call deallocate(uv_fld)
     
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
     
     call assemble_K(K11, 11)
     call assemble_K(K22, 22)
@@ -327,13 +327,13 @@ contains
 
     m = 8+1
     n = 8+1
-    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
-    call allocate(q0, m, n, 'q0', glayer=gl, type_id=0)
+    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
+    call allocate(q0, m, n, 'q0', glayer=gl, type_id=2)
     call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
 
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
 
 
     ! Assign fields
@@ -568,15 +568,15 @@ contains
     ! Test 1DS and 1DS2 equivalence
     m = 80
     n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
-    call allocate(qLW, m, n, 'qLW', glayer=gl, type_id=0)
-    call allocate(q2D, m, n, 'q2D', glayer=gl, type_id=0)
+    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
+    call allocate(qLW, m, n, 'qLW', glayer=gl, type_id=2)
+    call allocate(q2D, m, n, 'q2D', glayer=gl, type_id=2)
     
     call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
 
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
     
     call manual_field(psi, 7)  ! TG
 
@@ -712,14 +712,14 @@ contains
     
     nts = 512*m
     n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
-    call allocate(q_steady, m, n, 'q_steady', glayer=gl, type_id=0)
-    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=0)
+    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
+    call allocate(q_steady, m, n, 'q_steady', glayer=gl, type_id=2)
+    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=2)
     call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
 
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
 
     ! test_id = 2: q_steady
     call testcase_fields(psi, K11, K22, K12, q_steady, 2)
@@ -788,14 +788,14 @@ contains
     real(kind=dp) :: t_i, err_int, err_sup
     
     n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=0)
-    call allocate(q_exact, m, n, 'q_exact', glayer=gl, type_id=0)
-    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=0)
+    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
+    call allocate(q_exact, m, n, 'q_exact', glayer=gl, type_id=2)
+    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=2)
     call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
 
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=0)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=0)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=0)
+    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
+    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
+    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
 
     ! test_id = 1: q(t) 1-periodic
     call testcase_fields(psi, K11, K22, K12, q_exact, 1)
@@ -925,8 +925,8 @@ contains
     ! reflv: Solver grid = (m*reflv, n*reflv)
     reflv = 2
     
-    call allocate(mesh, m, n, reflv, reflv)
-    call allocate(dof, m, n)
+    call allocate(mesh, m*reflv, n*reflv)
+    call allocate(dof, m-1, n-1, m, n)
 
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L  ! mesh%m = solver grid, not DOF
@@ -941,6 +941,8 @@ contains
     
     call write_theta(dof, "./unittest/test_theta", sc, 1)
 
+    call print_info(dof)
+
     write(6, "(a)") &
       "! ----------- Passed unittest_IO ----------- !"
   end subroutine unittest_IO
@@ -951,7 +953,7 @@ contains
     type(trajdat) :: traj
     real(kind=dp) :: T
 
-    integer :: m, n, cell, reflv, m_Ind, n_Ind
+    integer :: m, n, cell, m_solver, n_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_MAP, dof_old, dof_SSD
@@ -971,7 +973,7 @@ contains
     real(kind=dp) :: alphaUniRV
     real(kind=dp), dimension(1) :: UniRV
 
-    integer, parameter :: Td = 60
+    integer, parameter :: Td = 30
 !    character(len = *), parameter :: RunProfile = "K_TG_iso"
 !    character(len = *), parameter :: RunProfile = "K_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "TTG_const"
@@ -992,21 +994,26 @@ contains
     call start(total_timer)
 
     ! m, n: DOF/control
-    m = 2
-    n = m
-    ! reflv: Solver grid = (m*reflv, n*reflv)
-    reflv = 2
+    m = 4
+    n = 8
+    ! m_solver: solver grid
+    m_solver = 16
     ! m_Ind, n_Ind: indicator functions
-    m_Ind = 2
+    m_Ind = 8
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
-    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m*n*reflv*reflv,"_D", m*n, "_I", m_Ind*n_Ind
+    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
+    
+    ! AD-HOC
+    write(output_fld, "(a)") "./output/test/"
+    ! END AD-HOC
 
-    call allocate(mesh, m, n, reflv, reflv)
-    call allocate(dof, m, n)
+    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
+    call allocate(dof, m-1, n-1, m, n) 
+    ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
 
     ! Initialise fields
@@ -1052,24 +1059,22 @@ contains
     allocate(logPost_old(IndFn%nIND))
 
     ! MCMC
-    call allocate(dof_old, m, n)
-    call allocate(dof_MAP, m, n)
-    call allocate(dof_SSD, m, n)
+    call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
+    call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
+    call allocate(dof_SSD, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
 
     call init_random_seed();
-
     
     ! Set up stepsize for random sampling
     call set(dof_SSD%psi, 0.05_dp*psi_scale*sc)
 
-    call set(dof_SSD%K11, 0.025_dp*kappa_scale*sc)
-    call set(dof_SSD%K22, 0.025_dp*kappa_scale*sc)
-    call set(dof_SSD%K12, 0.025_dp)
+    call set(dof_SSD%K11, 0.0125_dp*kappa_scale*sc)
+    call set(dof_SSD%K22, 0.0125_dp*kappa_scale*sc)
+    call set(dof_SSD%K12, 0.050_dp)
     
     ! Initialise
     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
     SlogPost = sum(logPost)
-    !SlogPost = evaluate_Sloglik_OMP(jumps, IndFn, mesh, dof, h, nts)
     
     write(6, *) "SlogPost = ", SlogPost
     
@@ -1082,8 +1087,9 @@ contains
 
     ind = 0
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", SlogPost_old
-    call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+    FLUSH(6)
 
+    call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
     call reset_timestep_timers()
     call reset_inference_timers()
 
@@ -1091,26 +1097,31 @@ contains
     ! write(6, *) "propose_dof_K: isotropic diffusivity"
     ! TODO: delete Adhoc
     
+    
     niter = max(500, m*m)
-    niter = 1
+    niter = 8
     do iter = 1, niter
       ! In each iteration loop over all cells
-      do dof_id = 1, dof%ndof
+      do dof_id = 1, 1
         ! Initialise K_prop
         call set(dof, dof_old)
         logPost = logPost_old
 
         ! Proposal
         call start(propose_timer)
-        call propose_dof(dof, dof_id, dof_SSD)
-        !call propose_dof_all(dof, iter, dof_SSD)
+        !call propose_dof(dof, dof_id, dof_SSD)   ! TODO: to implement
+        call propose_dof_all(dof, iter, dof_SSD)
         call stop(propose_timer)
 
+!         call print_array(dof%psi%data, "psi")
+!         call print_array(dof%K11%data, "K11")
+!         call print_array(dof%K22%data, "K22")
+!         call print_array(dof%K12%data, "K12")
+          
         ! Evaluate likelihood
         call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
         SlogPost = sum(logPost)
-        !SlogPost = evaluate_Sloglik_OMP(jumps, IndFn, mesh, dof, h, nts)
-
+        
         ! Metropolis-Hastings
         alphaUniRV = dexp(SlogPost - SlogPost_old);
         call RANDOM_NUMBER(UniRV)
@@ -1129,7 +1140,7 @@ contains
       end do
 
       ! I/O
-      if (mod(iter, 10) .eq. 0) then
+      if (mod(iter, 4) .eq. 0) then
         write(6, "(i0, a, "//dp_chr//")") iter, "-th step: logPost = ", SlogPost_old
         FLUSH(6)
         
@@ -1145,11 +1156,8 @@ contains
     call deallocate(traj)
     call deallocate(dof)
     call deallocate(IndFn)
-
-    do cell = 1, mesh%ncell
-      call deallocate(jumps(cell))
-    end do
-
+    call deallocate(jumps)
+    
     ! MH
     deallocate(logPost_old)
     deallocate(logPost)
@@ -1230,7 +1238,7 @@ contains
 !       write(6, "(a, a)") "Reading from Output path: ", trim(output_fld)
 !     end if
 ! 
-!     call allocate(mesh, m, n, reflv, reflv)
+!     call allocate(mesh, m*reflv, n*reflv)
 !     call allocate(IndFn, 8, 8)
 !  
 !     ! Initialise fields
@@ -1278,7 +1286,7 @@ contains
 !     INDk = 37
 !     
 !     call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!     call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=0)
+!     call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
 !     
 !     ! Solve FK equation
 !     call INDk_to_klist(klist, INDk, IndFn, mesh)
@@ -1319,12 +1327,12 @@ contains
 !       m = 16
 !       n = m
 !       reflv = 4
-!       call allocate(mesh, m, n, reflv, reflv)
-!       call allocate(dof, m, n)
+!       call allocate(mesh, m*reflv, n*reflv)
+!       call allocate(dof, m, n, m, n)
 !       
 !       ! To determine size of Qk
 !       call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!       call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=0)
+!       call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
 ! 
 !       allocate(Qk(size(q%data,1)*size(q%data,2), dof%ndof*3))
 !       allocate(q_unfold(size(q%data,1)*size(q%data, 2)))
@@ -1350,7 +1358,7 @@ contains
 !           if (cmp .eq. 3) dof%K12%data(i0, j0) = 1.0_dp
 !           
 !           call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!           call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=0)
+!           call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
 !           call initialise_q(q, klist, mesh)
 !           !call scale(q, 1000000.0_dp)
 !           call advdiff_q(q, rdof%psi, rdof%K11, rdof%K22, rdof%K12, h, nts)
