@@ -16,7 +16,7 @@ make clean
 make
 
 date
-#nohup ./advdiff > mon_advdiff64_3.txt &
+#nohup ./advdiff > mon_advdiff64_2.txt &
 ./advdiff
 
 date 
@@ -24,4 +24,7 @@ date
 #make clean
 
 #python ./python/animate_field.py
+
+# Memory debugger
+#valgrind --track-origins=yes --leak-check=full  --show-reachable=yes ./advdiff
 

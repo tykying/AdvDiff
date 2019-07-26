@@ -20,7 +20,7 @@ module advdiff_field
   public :: print_info, diff_int
   public :: testcase_fields, fld_x, assign_q_periodic
   public :: q_stat, S_rhs_nonstat, S_rhs_stat
-  public :: fourier_intpl, cosine_intpl
+  public :: fourier_intpl, cosine_intpl, sine_intpl, bilinear_intpl
   
   ! Note: field and field_ptr are different
   type field
@@ -50,8 +50,7 @@ module advdiff_field
   end type T_operator
 
   interface allocate
-    module procedure allocate_field, allocate_uv, &
-                     allocate_Kflux, allocate_KfluxE !, &
+    module procedure allocate_field, allocate_uv, allocate_Kflux !, &
 !                      allocate_refined_field
   end interface allocate
 
@@ -223,6 +222,7 @@ contains
   end subroutine fourier_intpl
 
   subroutine cosine_intpl(out, in, Mx, My)
+    ! NOT IN USE
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
 
@@ -282,6 +282,70 @@ contains
     call fftw_cleanup()
 
   end subroutine cosine_intpl
+
+  subroutine sine_intpl(out, in, Mx, My)
+    ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+  
+    type(C_PTR) :: plan
+    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
+    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    
+    integer :: i, j
+    
+    if ((size(out, 1)+1) .ne. (size(in, 1)+1) * Mx) then
+       write(6, *) "Mx = ", Mx
+       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
+      call abort_handle("sine_intpl: size mismatch", __FILE__, __LINE__)
+    end if
+    if ((size(out, 2)+1) .ne. (size(in, 2)+1) * My) then
+      write(6, *) "My = ", My
+      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
+      call abort_handle("sine_intpl: size mismatch", __FILE__, __LINE__)
+    end if
+    
+    allocate(Bpq(size(in,1), size(in,2)))
+    allocate(in_copy(size(in,1), size(in,2)))
+    allocate(Bpq_pad(size(out,1), size(out,2)))
+
+    in_copy = in
+    
+    ! Forward DCT
+    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
+                            FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, in_copy, Bpq)
+    call fftw_destroy_plan(plan)
+
+    call print_array(Bpq, "Bpq")
+    
+    ! Zero padding: only need to pad zeros beyond Bpq
+    !! Relationship with matlab dct2
+    !! http://www.voidcn.com/article/p-pduypgxe-du.html
+    Bpq_pad = 0.0_dp
+    do j = 1, size(Bpq, 2)
+      do i = 1, size(Bpq, 1)
+        Bpq_pad(i, j) = Bpq(i, j)
+      end do
+    end do
+    
+    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
+                          out, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, Bpq_pad, out)
+    call fftw_destroy_plan(plan)
+
+    out = out/(4*(size(in,1)+1)*(size(in,2)+1))
+    
+    deallocate(Bpq)
+    deallocate(Bpq_pad)
+    deallocate(in_copy)
+    call fftw_cleanup()
+
+  end subroutine sine_intpl
   
   subroutine bilinear_intpl(out, in, Mx, My)
     real(kind=dp), dimension(:, :), intent(out) :: out
@@ -413,8 +477,12 @@ contains
     real(kind=dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
 
     m = K11%m
-    n = K22%n
+    n = K11%n
 
+    if (K11%type_id .ne. 1) then
+      call abort_handle("Wrong K11%type_id", __FILE__, __LINE__)
+    end if 
+    
     allocate(K_e%K11e(m+1, n))  ! Define at vertical edges
     allocate(K_e%K12e(m+1, n))  ! Define at vertical edges
     allocate(K_e%K21e(m, n+1))  ! Define at horizonal edges
@@ -425,82 +493,23 @@ contains
     K21e => K_e%K21e
     K22e => K_e%K22e
 
-    ! K: cell-centred
-    if ( (K11%type_id .eq. 2) .and. &
-         (K22%type_id .eq. 2) .and. (K12%type_id .eq. 2) ) then
-      ! For K11 and K12
-      do j = 1, n
-        do i = 2, m
-          K11e(i,j) = 0.5_dp*(K11%data(i,j) + K11%data(i-1,j))
-          K12e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i-1,j))
-        end do
-      end do
-
-      ! Set diffusivity at domain boundaries at the nearest value
-      ! (To be replaced by BC later)
-      do j = 1, n
-        K11e(1,j) = K11%data(1,j)
-        K12e(1,j) = K12%data(1,j)
-        K11e(m+1,j) = K11%data(m,j)
-        K12e(m+1,j) = K12%data(m,j)
-      end do
-
-      ! For K21 and K22
-      do j = 2, n
-        do i = 1, m
-          K21e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i,j-1))
-          K22e(i,j) = 0.5_dp*(K22%data(i,j) + K22%data(i,j-1))
-        end do
-      end do
-
-      ! Set diffusivity at domain boundaries at the nearest value
-      ! (To be replaced by BC later)
-      do i = 1, m
-        K21e(i,1) = K12%data(i,1)
-        K22e(i,1) = K22%data(i,1)
-        K21e(i,n+1) = K12%data(i,n)
-        K22e(i,n+1) = K22%data(i,n)
-      end do
-
     ! K: at corners
-    elseif ( (K11%type_id .eq. 1) .and. &
-             (K22%type_id .eq. 1) .and. (K12%type_id .eq. 1) ) then
-      ! For K11 and K12
-      do j = 1, n
-        do i = 1, m+1
-          K11e(i,j) = 0.5_dp*(K11%data(i,j) + K11%data(i,j+1))
-          K12e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i,j+1))
-        end do
+    ! For K11 and K12
+    do j = 1, n
+      do i = 1, m+1
+        K11e(i,j) = 0.5_dp*(K11%data(i,j) + K11%data(i,j+1))
+        K12e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i,j+1))
       end do
-
-      ! For K21 and K22
-      do j = 1, n+1
-        do i = 1, m
-          K21e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i+1,j))
-          K22e(i,j) = 0.5_dp*(K22%data(i,j) + K22%data(i+1,j))
-        end do
+    end do
+    ! For K21 and K22
+    do j = 1, n+1
+      do i = 1, m
+        K21e(i,j) = 0.5_dp*(K12%data(i,j) + K12%data(i+1,j))
+        K22e(i,j) = 0.5_dp*(K22%data(i,j) + K22%data(i+1,j))
       end do
-    else
-      write(6, *) "Wrong type_id in allocate_Kflux"
-      stop 1
-    end if
+    end do
+    
   end subroutine allocate_Kflux
-
-  subroutine allocate_KfluxE(K_e, K11e, K12e, K21e, K22e)
-    type(K_flux), intent(inout) :: K_e
-    type(field), intent(in) :: K11e, K12e, K21e, K22e
-
-    allocate(K_e%K11e(K11e%m, K11e%n))  ! Define at vertical edges
-    allocate(K_e%K12e(K12e%m, K12e%n))  ! Define at vertical edges
-    allocate(K_e%K21e(K21e%m, K21e%n))  ! Define at horizonal edges
-    allocate(K_e%K22e(K22e%m, K22e%n))  ! Define at horizonal edges
-
-    K_e%K11e = K11e%data
-    K_e%K12e = K12e%data
-    K_e%K21e = K21e%data
-    K_e%K22e = K22e%data
-
-  end subroutine allocate_KfluxE
 
   subroutine deallocate_Kflux(K_e)
     type(K_flux), intent(inout) :: K_e
@@ -516,7 +525,6 @@ contains
     type(field), intent(inout) :: fld
 
     fld%data = 0.0_dp
-
   end subroutine zero_field
 
   subroutine scale_field(fld, scale)

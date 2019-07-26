@@ -22,13 +22,13 @@ contains
     !call unittest_comptools()
     !call unittest_trajdata()
     !call unittest_solver_properties()
-    !call unittest_fftw()
+    call unittest_fftw()
     !call unittest_solver_timing()
     !call unittest_IO()
     !call unittest_2DLik()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    call unittest_inference_OMP()
+    !call unittest_inference_OMP()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -545,6 +545,46 @@ contains
     deallocate(data_exact)
     deallocate(data_intpl)
     
+    ! Discrete sine transform
+    ! Data input
+    allocate(data_in(Nx+1, Ny+1))
+    do j = 1, size(data_in, 2)
+      do i = 1, size(data_in, 1)
+        x = real(i-1, kind=dp)/real(Nx, kind=dp)
+        y = real(j-1, kind=dp)/real(Ny, kind=dp)
+        
+!        data_in(i, j) = dcos(Pi*(x+y))*dcos(2.0_dp*Pi*(x-y));
+        data_in(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(4.0_dp*Pi*x)*dsin(6.0_dp*Pi*y)
+        !data_in(i, j) = (x + y**2)*dsin(Pi*x)*dcos(2.0_dp*Pi*(x-y))
+        !data_in(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
+      end do
+    end do
+    
+    ! Data exact
+    allocate(data_exact(Nx*scx+1, Ny*scy+1))
+    do j = 1, size(data_exact, 2)
+      do i = 1, size(data_exact, 1)
+        x = real(i-1, kind=dp)/real(Nx*scx, kind=dp)
+        y = real(j-1, kind=dp)/real(Ny*scy, kind=dp)
+        
+        data_exact(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(4.0_dp*Pi*x)*dsin(6.0_dp*Pi*y)
+      end do
+    end do
+    
+    ! Test : Interpolation subroutine
+    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
+    data_intpl = 0.0_dp
+    call sine_intpl(data_intpl(2:Nx*scx, 2:Ny*scy), data_in(2:Nx, 2:Ny), scx, scy)
+    
+    if (.not. iszero(data_exact-data_intpl)) then
+      call print_array(data_exact/data_intpl, "data_exact/data_intpl")
+      call abort_handle(" ! FAIL  @ Inconsistent sine_intpl", __FILE__, __LINE__)
+    end if
+    
+    deallocate(data_in)
+    deallocate(data_exact)
+    deallocate(data_intpl)
+    
   end subroutine unittest_fftw
   
   subroutine unittest_solver_timing()
@@ -966,7 +1006,7 @@ contains
     real(kind=dp) :: sc, h, dt
     integer :: nts
     real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
-    real(kind=dp) :: SlogPost_old, SlogPost, SlogPost_MAP
+    real(kind=dp) :: SlogPost
 
     integer :: dof_id
     integer :: iter, niter, ind
@@ -994,10 +1034,10 @@ contains
     call start(total_timer)
 
     ! m, n: DOF/control
-    m = 4
+    m = 8
     n = 8
     ! m_solver: solver grid
-    m_solver = 16
+    m_solver = 64
     ! m_Ind, n_Ind: indicator functions
     m_Ind = 8
     n_Ind = m_Ind
@@ -1007,12 +1047,8 @@ contains
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
-    ! AD-HOC
-    write(output_fld, "(a)") "./output/test/"
-    ! END AD-HOC
-
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m-1, n-1, m, n) 
+    call allocate(dof, m-1, n-1, m+1, n+1) 
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
 
@@ -1074,19 +1110,14 @@ contains
     
     ! Initialise
     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-    SlogPost = sum(logPost)
+    dof%SlogPost = sum(logPost)
+    write(6, *) "SlogPost = ", dof%SlogPost
     
-    write(6, *) "SlogPost = ", SlogPost
-    
-    SlogPost_MAP = SlogPost
-    SlogPost_old = SlogPost
-    logPost_old = logPost
-
     call set(dof_old, dof)
     call set(dof_MAP, dof)
 
     ind = 0
-    write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", SlogPost_old
+    write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
 
     call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
@@ -1097,51 +1128,45 @@ contains
     ! write(6, *) "propose_dof_K: isotropic diffusivity"
     ! TODO: delete Adhoc
     
-    
     niter = max(500, m*m)
-    niter = 8
     do iter = 1, niter
       ! In each iteration loop over all cells
-      do dof_id = 1, 1
+      do dof_id = 1, (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K)
         ! Initialise K_prop
         call set(dof, dof_old)
         logPost = logPost_old
 
         ! Proposal
         call start(propose_timer)
-        !call propose_dof(dof, dof_id, dof_SSD)   ! TODO: to implement
-        call propose_dof_all(dof, iter, dof_SSD)
+        call propose_dof(dof, dof_id, dof_SSD)   ! TODO: to implement
+        !call propose_dof_all(dof, iter, dof_SSD)
         call stop(propose_timer)
-
-!         call print_array(dof%psi%data, "psi")
-!         call print_array(dof%K11%data, "K11")
-!         call print_array(dof%K22%data, "K22")
-!         call print_array(dof%K12%data, "K12")
-          
+        
         ! Evaluate likelihood
         call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-        SlogPost = sum(logPost)
+        dof%SlogPost = sum(logPost)
         
         ! Metropolis-Hastings
-        alphaUniRV = dexp(SlogPost - SlogPost_old);
+        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost);
         call RANDOM_NUMBER(UniRV)
 
         if (UniRV(1) < alphaUniRV) then
           logPost_old = logPost
-          SlogPost_old = SlogPost
           call set(dof_old, dof)
+          dof_old%occurrence = 0
+        else
+          dof%occurrence = dof%occurrence + 1
         end if
 
         ! Record MAP
-        if (SlogPost > SlogPost_MAP) then
-          SlogPost_MAP = SlogPost
+        if (dof%SlogPost > dof_MAP%SlogPost) then
           call set(dof_MAP, dof)
         end if
       end do
 
       ! I/O
-      if (mod(iter, 4) .eq. 0) then
-        write(6, "(i0, a, "//dp_chr//")") iter, "-th step: logPost = ", SlogPost_old
+      if (mod(iter, 10) .eq. 0) then
+        write(6, "(i0, a, "//dp_chr//")") iter, "-th step: logPost = ", dof_old%SlogPost
         FLUSH(6)
         
         ind = ind + 1

@@ -67,7 +67,7 @@ contains
     call allocate(dof%psi, m_psi, n_psi, 'psi', glayer=0, type_id=type_id)
 
     ! Defined at cell centre + DOF -> -2
-    type_id = -2
+    type_id = -1  ! Including the boundaries
     call allocate(dof%K11, m_K, n_K, 'K11', glayer=0, type_id=type_id)
     call allocate(dof%K22, m_K, n_K, 'K22', glayer=0, type_id=type_id)
     call allocate(dof%K12, m_K, n_K, 'K12', glayer=0, type_id=type_id)
@@ -121,6 +121,9 @@ contains
     call set(dof%K22, dof_in%K22)
     call set(dof%K12, dof_in%K12)
 
+    dof%SlogPost = dof_in%SlogPost
+    dof%occurrence = dof_in%occurrence
+    
   end subroutine set_dof
   
   subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
@@ -222,7 +225,6 @@ contains
     integer :: k_i, i
 
     call start(loglik_timer)
-
     eval_INDk_loglik = 0.0_dp
 
     ! Find out the cells corresponding to the indicator function
@@ -231,19 +233,11 @@ contains
     
     ! Solve FK equation
     call initialise_q(q, klist, mesh)
-
-!     call print_array(q%data, "q0%data")
     call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
 !       if (.not. is_nneg(q%data)) then
 !         write(6, "(a,"//dp_chr//")") "Non-negative q!: ", minval(q%data)
 !       end if
-
-!     call print_array(dof_solver%psi%data, "dof_solver%psi")
-!     call print_array(dof_solver%K11%data, "dof_solver%K11")
-!     call print_array(dof_solver%K22%data, "dof_solver%K22")
-!     call print_array(dof_solver%K12%data, "dof_solver%K12")
-!     call print_array(q%data, "q%data")
-
+    
     ! Evaluate likelihood
     call start(intpl_timer)
     do i = 1, size(klist, 1)
@@ -268,8 +262,6 @@ contains
   subroutine allocate_dof_solver(dof_solver, mesh)
     type(dofdat), intent(out) :: dof_solver
     type(meshdat), intent(in) :: mesh
-
-    integer :: type_id ! 1= corner; 2= centres; *-1 = DOF
     
     dof_solver%m_psi = mesh%m
     dof_solver%n_psi = mesh%n
@@ -277,15 +269,12 @@ contains
     dof_solver%n_K = mesh%n
     dof_solver%ndof = 0
 
-    ! Defined at corners
-    type_id = 1
-    call allocate(dof_solver%psi, mesh%m, mesh%n, 'psi', glayer=0, type_id=type_id)
+    ! Defined at corners (! 1= corner; 2= centres; *-1 = DOF)
+    call allocate(dof_solver%psi, mesh%m, mesh%n, 'psi', glayer=0, type_id=1)
 
-    ! Defined at cell centre
-    type_id = 2
-    call allocate(dof_solver%K11, mesh%m, mesh%n, 'K11', glayer=0, type_id=type_id)
-    call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', glayer=0, type_id=type_id)
-    call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', glayer=0, type_id=type_id)
+    call allocate(dof_solver%K11, mesh%m, mesh%n, 'K11', glayer=0, type_id=1)
+    call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', glayer=0, type_id=1)
+    call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', glayer=0, type_id=1)
 
     dof_solver%occurrence = 0
     dof_solver%SlogPost = 0.0_dp
@@ -310,27 +299,37 @@ contains
     m = dof%psi%m
     n = dof%psi%n
 
-    allocate(fldij(m+1, n+1))
+!     allocate(fldij(m+1, n+1))
+!     fldij = 0.0_dp  ! Boundary condition for stream function
+!     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+!     
+!     Mx = mesh%m/(m+1)
+!     My = mesh%n/(n+1)
+!     ! Assumed periodic(= 0) at first and final row/column
+!     call fourier_intpl(dof_solver%psi%data(1:mesh%m, 1:mesh%n), fldij, Mx, My)
+!     dof_solver%psi%data(mesh%m+1, :) = dof_solver%psi%data(1, :)  ! Impose periodicity
+!     dof_solver%psi%data(:, mesh%n+1) = dof_solver%psi%data(:, 1)  ! Impose periodicity
+! 
+!     deallocate(fldij)
+
+    allocate(fldij(m+2, n+2))
     fldij = 0.0_dp  ! Boundary condition for stream function
     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
     
     Mx = mesh%m/(m+1)
     My = mesh%n/(n+1)
     ! Assumed periodic(= 0) at first and final row/column
-    call fourier_intpl(dof_solver%psi%data(1:mesh%m, 1:mesh%n), fldij, Mx, My)
-    dof_solver%psi%data(mesh%m+1, :) = dof_solver%psi%data(1, :)  ! Impose periodicity
-    dof_solver%psi%data(:, mesh%n+1) = dof_solver%psi%data(:, 1)  ! Impose periodicity
-
+    call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
     deallocate(fldij)
     
     ! Diffusivity
     ! N.B. DOF%psi = Cartesian grid at cell centre
-    Mx = mesh%m/dof%K11%m
-    My = mesh%n/dof%K11%n
+    Mx = mesh%m/(dof%K11%m-1)
+    My = mesh%n/(dof%K11%n-1)
     
-    call cosine_intpl(dof_solver%K11%data, dof%K11%data, Mx, My)
-    call cosine_intpl(dof_solver%K22%data, dof%K22%data, Mx, My)
-    call cosine_intpl(dof_solver%K12%data, dof%K12%data, Mx, My)
+    call bilinear_intpl(dof_solver%K11%data, dof%K11%data, Mx, My)
+    call bilinear_intpl(dof_solver%K22%data, dof%K22%data, Mx, My)
+    call bilinear_intpl(dof_solver%K12%data, dof%K12%data, Mx, My)
     
   end subroutine intpl_dof_solver
 
@@ -355,19 +354,20 @@ contains
     type(dofdat), intent(in) :: dof_SSD
     
     integer :: K_id, psi_id
-
-    call abort_handle("TODO: Non overlapping DOF in K and psi", __FILE__, __LINE__)
     
     if (dof_id .le. dof%m_psi*dof%n_psi) then
-      K_id = dof_id
-      psi_id = dof%ndof - dof_id + 1
-    else
-      K_id = 1
       psi_id = dof_id
+      call propose_dof_psi(dof, psi_id, dof_SSD)
+      
+      psi_id = dof%m_psi*dof%n_psi -dof_id +1
+      call propose_dof_psi(dof, psi_id, dof_SSD)
+    else
+      K_id = dof_id - dof%m_psi*dof%n_psi
+      call propose_dof_K(dof, K_id, dof_SSD)
+      
+      K_id = (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K) -(dof_id - dof%m_psi*dof%n_psi) +1
+      call propose_dof_K(dof, K_id, dof_SSD)
     end if
-    
-    call propose_dof_K(dof, K_id, dof_SSD)
-    call propose_dof_psi(dof, psi_id, dof_SSD)
     
   end subroutine propose_dof
   
@@ -399,35 +399,34 @@ contains
     integer :: i0, j0, i, j
     real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
 
+    ! Define at corners
+    if (dof%K11%type_id .ne. -1) &
+      call abort_handle("Invalid type_id for K11", __FILE__, __LINE__)
+      
     i0 = k2i(dof_id, dof%m_K)
     j0 = k2j(dof_id, dof%m_K)
 
-    if ( (dof%K11%type_id .eq. -2) .and. &
-      (dof%K22%type_id .eq. -2) .and. (dof%K12%type_id .eq. -2) ) then
-      ! K: defined at cell-centres
-      Kxx = dof%K11%data(i0,j0)
-      Kyy = dof%K22%data(i0,j0)
-      Kxy = dof%K12%data(i0,j0)
+    ! K: defined at corners
+    Kxx = dof%K11%data(i0,j0)
+    Kyy = dof%K22%data(i0,j0)
+    Kxy = dof%K12%data(i0,j0)
 
-      call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
+    call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
 
-      ! Perturbation
-      sigma1_sq = dabs(sigma1_sq + dof_SSD%K11%data(i0,j0)*randn() )
-      sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i0,j0)*randn() )
-      phi_K = phi_K + dof_SSD%K12%data(i0,j0)*randn()
+    ! Perturbation
+    sigma1_sq = dabs(sigma1_sq + dof_SSD%K11%data(i0,j0)*randn() )
+    sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i0,j0)*randn() )
+    phi_K = phi_K + dof_SSD%K12%data(i0,j0)*randn()
 
-      !! TODO: delete Adhoc
-      !phi_K = 0.0_dp
-      !! TODO: delete Adhoc
+    !! TODO: delete Adhoc
+    !phi_K = 0.0_dp
+    !! TODO: delete Adhoc
 
-      call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
+    call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
 
-      dof%K11%data(i0,j0) = Kxx
-      dof%K22%data(i0,j0) = Kyy
-      dof%K12%data(i0,j0) = Kxy
-    else
-      call abort_handle("Invalid type_id for K", __FILE__, __LINE__)
-    end if
+    dof%K11%data(i0,j0) = Kxx
+    dof%K22%data(i0,j0) = Kyy
+    dof%K12%data(i0,j0) = Kxy
 
   end subroutine propose_dof_K
 
