@@ -12,10 +12,10 @@ module advdiff_io
 
   private
 
-  public :: read_header, read, write
+  public :: read_header, read, write, read_theta
 
   interface read_header
-    module procedure read_field_header, read_traj_header, read_dof
+    module procedure read_field_header, read_traj_header
   end interface read_header
 
   interface read
@@ -391,6 +391,45 @@ contains
     
   end subroutine convert_dof_to_theta
   
+  subroutine convert_theta_to_dof(dof, theta, sc)
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), dimension(:), intent(in) :: theta
+    real(kind = dp), intent(in) :: sc
+
+    integer :: i, j, k
+    
+    k = 0
+    ! Psi
+    do j = 1, size(dof%psi%data, 2)
+      do i = 1, size(dof%psi%data, 1)
+        k = k + 1
+        dof%psi%data(i, j) = theta(k) *sc
+      end do
+    end do
+    ! K11
+    do j = 1, size(dof%K11%data, 2)
+      do i = 1, size(dof%K11%data, 1)
+        k = k + 1
+        dof%K11%data(i, j) = theta(k) *sc
+      end do
+    end do
+    ! K22
+    do j = 1, size(dof%K22%data, 2)
+      do i = 1, size(dof%K22%data, 1)
+        k = k + 1
+        dof%K22%data(i, j) = theta(k) *sc
+      end do
+    end do
+    ! K12
+    do j = 1, size(dof%K12%data, 2)
+      do i = 1, size(dof%K12%data, 1)
+        k = k + 1
+        dof%K12%data(i, j) = theta(k) *sc
+      end do
+    end do
+    
+  end subroutine convert_theta_to_dof
+  
   subroutine write_theta(dof, filename, sc, index)
     type(dofdat), intent(in) :: dof
     character(len = *), intent(in) :: filename
@@ -440,6 +479,90 @@ contains
     deallocate(theta)
     
   end subroutine write_theta
+  
+  subroutine read_theta_header(dof, filename, index)
+    type(dofdat), intent(out) :: dof
+    character(len = *), intent(in) :: filename
+    integer, optional, intent(in) :: index
+
+    character(len = 1) :: chr
+    character(len = max_line_len) :: input_chr
+    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    integer :: m_psi, n_psi, type_id
+    integer :: m_K, n_K
+    real(kind=dp) :: SlogPost
+    integer :: occurrence
+
+    if(present(index)) then
+      write(lfilename, "(a,a,i0)") trim(filename), "_", index
+    else
+      lfilename = trim(filename)
+    end if
+    
+    open(unit = input_unit, file = trim(lfilename) // ".hdr", &
+      & status = "old", action = "read")
+    read(input_unit, "(a)") input_chr
+    read(input_unit, "(a)") input_chr
+    if(input_chr .ne. "4") then
+      call abort_handle("Invalid header", __FILE__, __LINE__)
+    end if
+    read(input_unit, "(a)") input_chr
+    read(input_chr, *) m_psi, n_psi, type_id
+    read(input_unit, "(a)") input_chr
+    read(input_chr, *) m_K, n_K, type_id
+    read(input_unit, "(a)") input_chr
+    read(input_chr, *) m_K, n_K, type_id
+    read(input_unit, "(a)") input_chr
+    read(input_chr, *) m_K, n_K, type_id
+    read(input_unit, "("//dp_chr//")") SlogPost
+    read(input_unit, "("//int_chr//")") occurrence
+    close(input_unit)
+    
+    call allocate(dof, m_psi, n_psi, m_K, n_K)
+  end subroutine read_theta_header
+  
+  subroutine read_theta(dof, filename, sc, index)
+    type(dofdat), intent(out) :: dof
+    character(len = *), intent(in) :: filename
+    real(kind=dp), optional, intent(in) :: sc
+    integer, optional, intent(in) :: index
+
+    character(len = 1) :: chr
+    character(len = max_line_len) :: input_chr
+    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    integer :: n_theta
+    real(kind=dp), dimension(:), allocatable :: theta
+    real(kind=dp) :: rsc
+
+    if(present(index)) then
+      write(lfilename, "(a,a,i0)") trim(filename), "_", index
+    else
+      lfilename = trim(filename)
+    end if
+
+    call read_theta_header(dof, filename, index)
+    
+    call allocate_theta(theta, dof)
+    
+    write(6, *) trim(lfilename) // ".dat"
+    
+    open(unit = input_unit, file = trim(lfilename) // ".dat", &
+      & status = "old", access = "stream", action = "read")
+    read(input_unit) theta
+    close(input_unit)
+    
+    if(present(sc)) then
+      rsc = sc
+    else
+      rsc = 1.0_dp
+    end if
+    
+    call convert_theta_to_dof(dof, theta, rsc)
+    
+    deallocate(theta)
+    
+  end subroutine read_theta
+ 
 
   subroutine reset_io_timers()
     call reset(write_field_timer)

@@ -145,7 +145,7 @@ contains
     !! Control number of thread = 32 by 
     !! "!$OMP PARALLEL DO num_threads(32)"
     
-    !$OMP PARALLEL DO num_threads(4)
+    !$OMP PARALLEL DO
     do INDk = 1, IndFn%nIND
       loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts)
     end do
@@ -294,11 +294,12 @@ contains
     ! DOF: can be coarse field(x_i, y_j) or Fourier coefficients
     ! dof_to_fldij: an interface from DOF to fld(i,j)
     
-    ! Streamfunction: psi:
+    ! Streamfunction: psi
     ! N.B. DOF%psi = non-bondary values, assumed boundary value = 0
     m = dof%psi%m
     n = dof%psi%n
 
+!     ! Fourier intepolation
 !     allocate(fldij(m+1, n+1))
 !     fldij = 0.0_dp  ! Boundary condition for stream function
 !     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
@@ -312,16 +313,23 @@ contains
 ! 
 !     deallocate(fldij)
 
+    ! Bilinear intepolation
     allocate(fldij(m+2, n+2))
     fldij = 0.0_dp  ! Boundary condition for stream function
     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-    
+   
     Mx = mesh%m/(m+1)
     My = mesh%n/(n+1)
     ! Assumed periodic(= 0) at first and final row/column
     call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
     deallocate(fldij)
-    
+
+!     ! Sine intepolation
+!     Mx = mesh%m/(m+1)
+!     My = mesh%n/(n+1)
+!     dof_solver%psi%data = 0.0_dp
+!     call sine_intpl(dof_solver%psi%data(2:mesh%m, 2:mesh%n), dof%psi%data, Mx, My)
+
     ! Diffusivity
     ! N.B. DOF%psi = Cartesian grid at cell centre
     Mx = mesh%m/(dof%K11%m-1)
@@ -365,7 +373,7 @@ contains
       K_id = dof_id - dof%m_psi*dof%n_psi
       call propose_dof_K(dof, K_id, dof_SSD)
       
-      K_id = (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K) -(dof_id - dof%m_psi*dof%n_psi) +1
+      K_id = dof%m_K*dof%n_K -(dof_id - dof%m_psi*dof%n_psi) +1
       call propose_dof_K(dof, K_id, dof_SSD)
     end if
     

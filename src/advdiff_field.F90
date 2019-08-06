@@ -320,8 +320,8 @@ contains
                             FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
     call fftw_execute_r2r(plan, in_copy, Bpq)
     call fftw_destroy_plan(plan)
-
-    call print_array(Bpq, "Bpq")
+    
+!     call print_array(Bpq, "Bpq")
     
     ! Zero padding: only need to pad zeros beyond Bpq
     !! Relationship with matlab dct2
@@ -358,12 +358,12 @@ contains
     if ((size(out,1)-1) .ne. (size(in,1)-1) * Mx) then
        write(6, *) "Mx = ", Mx
        write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+      call abort_handle("bilinear_intpl: size mismatch", __FILE__, __LINE__)
     end if
     if ((size(out,2)-1) .ne. (size(in,2)-1) * My) then
       write(6, *) "My = ", My
       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
+      call abort_handle("bilinear_intpl: size mismatch", __FILE__, __LINE__)
     end if
     
     ! Bilinear interpolations: for K

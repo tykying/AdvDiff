@@ -22,13 +22,13 @@ contains
     !call unittest_comptools()
     !call unittest_trajdata()
     !call unittest_solver_properties()
-    call unittest_fftw()
+    !call unittest_fftw()
     !call unittest_solver_timing()
     !call unittest_IO()
     !call unittest_2DLik()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    !call unittest_inference_OMP()
+    call unittest_inference_OMP()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -561,6 +561,8 @@ contains
     end do
     
     ! Data exact
+    scx = 2
+    scy = 4
     allocate(data_exact(Nx*scx+1, Ny*scy+1))
     do j = 1, size(data_exact, 2)
       do i = 1, size(data_exact, 1)
@@ -572,12 +574,13 @@ contains
     end do
     
     ! Test : Interpolation subroutine
-    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
+    allocate(data_intpl(size(data_exact,1), size(data_exact,2)))
     data_intpl = 0.0_dp
     call sine_intpl(data_intpl(2:Nx*scx, 2:Ny*scy), data_in(2:Nx, 2:Ny), scx, scy)
     
+!     call print_array(data_intpl, "data_intpl")
+!     call print_array(data_exact, "data_exact")
     if (.not. iszero(data_exact-data_intpl)) then
-      call print_array(data_exact/data_intpl, "data_exact/data_intpl")
       call abort_handle(" ! FAIL  @ Inconsistent sine_intpl", __FILE__, __LINE__)
     end if
     
@@ -585,6 +588,8 @@ contains
     deallocate(data_exact)
     deallocate(data_intpl)
     
+    write(6, "(a)") &
+      "! ----------- Passed unittest_fftw ----------- !"
   end subroutine unittest_fftw
   
   subroutine unittest_solver_timing()
@@ -979,9 +984,20 @@ contains
     call print_info(mesh)
     call print_info(dof)
     
+    call print_array(dof%K22%data)
+    
     call write_theta(dof, "./unittest/test_theta", sc, 1)
 
     call print_info(dof)
+    
+    call deallocate(dof)
+
+    call read_theta(dof, "./unittest/test_theta", sc, 1)
+    
+    call print_info(dof)
+    call print_array(dof%K22%data)
+    
+    call deallocate(dof)
 
     write(6, "(a)") &
       "! ----------- Passed unittest_IO ----------- !"
@@ -993,7 +1009,7 @@ contains
     type(trajdat) :: traj
     real(kind=dp) :: T
 
-    integer :: m, n, cell, m_solver, n_solver, m_Ind, n_Ind
+    integer :: m, n, cell, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_MAP, dof_old, dof_SSD
@@ -1006,21 +1022,20 @@ contains
     real(kind=dp) :: sc, h, dt
     integer :: nts
     real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
-    real(kind=dp) :: SlogPost
 
     integer :: dof_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
     real(kind=dp), dimension(1) :: UniRV
 
-    integer, parameter :: Td = 30
+    integer, parameter :: Td = 1
 !    character(len = *), parameter :: RunProfile = "K_TG_iso"
 !    character(len = *), parameter :: RunProfile = "K_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "TTG_const"
-    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
+!    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "K_const"
 !    character(len = *), parameter :: RunProfile = "TTG100_sinusoidal"
-!     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
+     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
 
@@ -1034,12 +1049,12 @@ contains
     call start(total_timer)
 
     ! m, n: DOF/control
-    m = 8
-    n = 8
+    m = 16
+    n = 16
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
-    m_Ind = 8
+    m_Ind = 16
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -1048,7 +1063,7 @@ contains
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m-1, n-1, m+1, n+1) 
+    call allocate(dof, m-1, n-1, m/2+1, n/2+1) 
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
 
@@ -1074,6 +1089,8 @@ contains
 
     ! Convert trajectory into jumps
     call traj2jumps(jumps, traj, mesh)
+    call deallocate(traj)
+
     !call print_info(jumps, mesh)
     
     ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
@@ -1110,17 +1127,18 @@ contains
     
     ! Initialise
     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-    dof%SlogPost = sum(logPost)
-    write(6, *) "SlogPost = ", dof%SlogPost
+    dof%SlogPost = real(sum(logPost), kind=dp)
     
     call set(dof_old, dof)
+    logPost_old = logPost
     call set(dof_MAP, dof)
 
     ind = 0
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
 
-    call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_bilinear", sc, ind)
+    
     call reset_timestep_timers()
     call reset_inference_timers()
 
@@ -1128,7 +1146,7 @@ contains
     ! write(6, *) "propose_dof_K: isotropic diffusivity"
     ! TODO: delete Adhoc
     
-    niter = max(500, m*m)
+    niter = max(4000, m*m)
     do iter = 1, niter
       ! In each iteration loop over all cells
       do dof_id = 1, (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K)
@@ -1138,21 +1156,21 @@ contains
 
         ! Proposal
         call start(propose_timer)
-        call propose_dof(dof, dof_id, dof_SSD)   ! TODO: to implement
+        call propose_dof(dof, dof_id, dof_SSD)
         !call propose_dof_all(dof, iter, dof_SSD)
         call stop(propose_timer)
         
         ! Evaluate likelihood
         call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-        dof%SlogPost = sum(logPost)
+        dof%SlogPost = real(sum(logPost), kind=dp)
         
         ! Metropolis-Hastings
-        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost);
+        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
         call RANDOM_NUMBER(UniRV)
 
         if (UniRV(1) < alphaUniRV) then
-          logPost_old = logPost
           call set(dof_old, dof)
+          logPost_old = logPost
           dof_old%occurrence = 0
         else
           dof%occurrence = dof%occurrence + 1
@@ -1170,26 +1188,25 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_bilinear", sc, ind)
       end if
     end do
 
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_bilinear", sc, -1)
 
     ! Release memory
-    call deallocate(traj)
-    call deallocate(dof)
-    call deallocate(IndFn)
-    call deallocate(jumps)
-    
     ! MH
     deallocate(logPost_old)
     deallocate(logPost)
     call deallocate(dof_old)
     call deallocate(dof_MAP)
     call deallocate(dof_SSD)
-
+    
+    call deallocate(dof)
+    call deallocate(IndFn)
+    call deallocate(jumps)
+    
     ! Timer
     call stop(total_timer)
     call print_timestep_timers()
@@ -1420,5 +1437,5 @@ contains
 !     call MPI_FINALIZE( ierr )
 ! 
 !   end subroutine unittest_FPsolver_INPUT
-!   
+  
 end program advdiff
