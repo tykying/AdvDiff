@@ -13,6 +13,7 @@ module advdiff_io
   private
 
   public :: read_header, read, write, read_theta
+  public :: convert_dof_to_theta
 
   interface read_header
     module procedure read_field_header, read_traj_header
@@ -188,6 +189,7 @@ contains
     integer, optional, intent(in) :: index
 
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    real(kind = dp) :: t
 
     if(present(index)) then
       write(lfilename, "(a,a,i0)") trim(filename), "_", index
@@ -195,6 +197,8 @@ contains
       lfilename = trim(filename)
     end if
 
+    call read_traj_header(traj, filename, t, index)
+    
     open(unit = input_unit, file = trim(lfilename) // "_x.dat", &
       & status = "old", access = "stream", action = "read")
     read(input_unit) traj%x
@@ -544,7 +548,7 @@ contains
     
     call allocate_theta(theta, dof)
     
-    write(6, *) trim(lfilename) // ".dat"
+    write(6, *) "Reading: "// trim(lfilename) // ".dat"
     
     open(unit = input_unit, file = trim(lfilename) // ".dat", &
       & status = "old", access = "stream", action = "read")

@@ -16,6 +16,8 @@ module advdiff_inference
   public :: validate_IndFn
   public :: propose_dof
   public :: eval_INDk_loglik
+  public :: reverse_dof_to_dof_inv
+  public :: compute_dJdm
 
   type dofdat
     integer :: m_psi, n_psi
@@ -243,6 +245,7 @@ contains
     do i = 1, size(klist, 1)
       k_i = klist(i)
       do jump = 1, jumps(k_i)%njumps
+        ! Bilinear interpolations
         lik = eval_fldpt(q, mesh, jumps(k_i)%k_f(jump), jumps(k_i)%alpha_f(:,jump))
         ! Set the negative probability to be 1e-16
         lik = max(1e-16, lik)
@@ -313,7 +316,7 @@ contains
 ! 
 !     deallocate(fldij)
 
-    ! Bilinear intepolation
+!     ! Bilinear intepolation
     allocate(fldij(m+2, n+2))
     fldij = 0.0_dp  ! Boundary condition for stream function
     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
@@ -324,7 +327,7 @@ contains
     call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
     deallocate(fldij)
 
-!     ! Sine intepolation
+    ! Sine intepolation
 !     Mx = mesh%m/(m+1)
 !     My = mesh%n/(n+1)
 !     dof_solver%psi%data = 0.0_dp
@@ -367,17 +370,26 @@ contains
       psi_id = dof_id
       call propose_dof_psi(dof, psi_id, dof_SSD)
       
-      psi_id = dof%m_psi*dof%n_psi -dof_id +1
-      call propose_dof_psi(dof, psi_id, dof_SSD)
+!       psi_id = dof%m_psi*dof%n_psi -dof_id +1
+!       call propose_dof_psi(dof, psi_id, dof_SSD)
     else
       K_id = dof_id - dof%m_psi*dof%n_psi
       call propose_dof_K(dof, K_id, dof_SSD)
       
-      K_id = dof%m_K*dof%n_K -(dof_id - dof%m_psi*dof%n_psi) +1
-      call propose_dof_K(dof, K_id, dof_SSD)
+!       K_id = dof%m_K*dof%n_K -(dof_id - dof%m_psi*dof%n_psi) +1
+!       call propose_dof_K(dof, K_id, dof_SSD)
     end if
     
   end subroutine propose_dof
+  
+  subroutine reverse_dof_to_dof_inv (dof_inv, dof)
+    type(dofdat), intent(inout) :: dof_inv
+    type(dofdat), intent(in) :: dof
+    
+    call set(dof_inv, dof)
+    call scale(dof_inv%psi, -1.0_dp)
+    
+  end subroutine reverse_dof_to_dof_inv
   
   subroutine propose_dof_all(dof, iter, dof_SSD)
     type(dofdat), intent(inout) :: dof
@@ -456,6 +468,26 @@ contains
     
   end subroutine propose_dof_psi
 
+  subroutine compute_dJdm(dJdm, J, J_old, m, m_old)
+    real(kind=dp), dimension(:, :), intent(out) :: dJdm
+    real(kind=dp), dimension(:), intent(in) :: J, J_old, m, m_old
+    
+    integer :: i, k
+    real(kind=dp) :: dm
+    
+    do k = 1, size(m, 1)
+      do i = 1, size(J, 1)
+        dm = m(k)-m_old(k)
+        if (dabs(dm) > 1e-10) then
+          dJdm(i,k) = (J(i) - J_old(i))/dm
+        else
+          dJdm(i,k) = 0.0_dp
+        end if
+      end do
+    end do
+    
+  end subroutine compute_dJdm
+  
   subroutine reset_inference_timers()
     call reset(loglik_timer)
     call reset(intpl_timer)

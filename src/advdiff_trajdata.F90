@@ -13,7 +13,7 @@ module advdiff_trajdata
   public :: allocate, deallocate
   public :: jumpsdat, trajdat, meshdat, eval_fldpt
   public :: normalise_traj
-  public :: traj2jumps, print_info
+  public :: traj2jumps, traj2jumps_inv, print_info
   public :: check_normalised_pos
   public :: read_uniform_h
 
@@ -306,6 +306,71 @@ contains
 
   end subroutine traj2jumps
 
+    ! Convert trajectory (normalised to [0,1]) into jumps wrt mesh
+  subroutine traj2jumps_inv(jumps, traj, mesh)
+    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    type(trajdat), intent(in) :: traj
+    type(meshdat), intent(in) :: mesh
+
+    integer, dimension(:), pointer :: njumps_ptr
+    integer, dimension(:,:), pointer :: Jcell_ptr
+
+    integer :: part, t_ind, cell
+    integer :: i, j
+
+    ! Determine number of jumps in each cell
+    allocate(njumps_ptr(mesh%Ncell))
+    allocate(Jcell_ptr(size(traj%x, 1), size(traj%x, 2)))
+
+    do cell = 1, mesh%Ncell
+      njumps_ptr(cell) = 0
+    end do
+
+    do part = 1, size(traj%x, 1)
+      do t_ind = size(traj%x, 2), 1, -1  ! Backward in time
+        i = CellInd(traj%x(part, t_ind),mesh%m)
+        j = CellInd(traj%y(part, t_ind),mesh%n)
+        cell = ij2k(i,j,mesh%m)
+
+        Jcell_ptr(part, t_ind) = cell
+        njumps_ptr(cell) = njumps_ptr(cell) + 1
+      end do
+
+      ! Remove the final count
+      njumps_ptr(cell) = njumps_ptr(cell) - 1
+    end do
+
+    ! Allocate each jumps_c
+    do cell = 1, mesh%Ncell
+      call allocate(jumps(cell), njumps_ptr(cell))
+    end do
+
+    ! Reset njumps_ptr to be used as a counter
+    do cell = 1, mesh%Ncell
+      njumps_ptr(cell) = 0
+    end do
+
+    do part = 1, size(traj%x, 1)
+      do t_ind = size(traj%x, 2), 2, -1 ! Backward in time
+        cell = Jcell_ptr(part, t_ind)
+        njumps_ptr(cell) = njumps_ptr(cell) + 1
+
+        ! Assign jumpdats
+        jumps(cell)%alpha_i(1, njumps_ptr(cell)) = alpha(traj%x(part, t_ind),mesh%m) ! Backward in time
+        jumps(cell)%alpha_i(2, njumps_ptr(cell)) = alpha(traj%y(part, t_ind),mesh%n) ! Backward in time
+        jumps(cell)%alpha_f(1, njumps_ptr(cell)) = alpha(traj%x(part, t_ind-1),mesh%m) ! Backward in time
+        jumps(cell)%alpha_f(2, njumps_ptr(cell)) = alpha(traj%y(part, t_ind-1),mesh%n) ! Backward in time
+
+        jumps(cell)%h(njumps_ptr(cell)) = traj%t(part, t_ind) - traj%t(part, t_ind-1)
+        jumps(cell)%k_f(njumps_ptr(cell)) = Jcell_ptr(part, t_ind-1)
+      end do
+    end do
+
+    deallocate(njumps_ptr)
+    deallocate(Jcell_ptr)
+
+  end subroutine traj2jumps_inv
+  
   pure logical function check_normalised_pos(traj)
     type(trajdat), intent(in) :: traj
     integer :: t_ind, part

@@ -124,6 +124,9 @@ def read_field(filename):
   if not len(handle.readline()) == 0:
     raise IOException("Invalid header")
   handle.close()
+  
+  if (type_id == 2):
+    type_id = 0
 
   handle = open_compressed("%s.dat" % filename, binary = True)
   arr = array.array(b"d")

@@ -25,10 +25,9 @@ contains
     !call unittest_fftw()
     !call unittest_solver_timing()
     !call unittest_IO()
-    !call unittest_2DLik()
-    !call unittest_FPsolver_INPUT()
+    call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    call unittest_inference_OMP()
+    !call unittest_inference_OMP()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -1006,13 +1005,15 @@ contains
   subroutine unittest_inference_OMP()
     use omp_lib
     type(jumpsdat), dimension(:), pointer :: jumps
+    type(jumpsdat), dimension(:), pointer :: jumps_inv
     type(trajdat) :: traj
-    real(kind=dp) :: T
+!     real(kind=dp) :: T
 
     integer :: m, n, cell, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_MAP, dof_old, dof_SSD
+    type(dofdat) :: dof_inv
     type(IndFndat) :: IndFn
 
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
@@ -1028,15 +1029,15 @@ contains
     real(kind=dp) :: alphaUniRV
     real(kind=dp), dimension(1) :: UniRV
 
-    integer, parameter :: Td = 1
+    integer, parameter :: Td = 32
 !    character(len = *), parameter :: RunProfile = "K_TG_iso"
 !    character(len = *), parameter :: RunProfile = "K_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "TTG_const"
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "K_const"
 !    character(len = *), parameter :: RunProfile = "TTG100_sinusoidal"
-     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+!     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
+    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
@@ -1063,20 +1064,22 @@ contains
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m-1, n-1, m/2+1, n/2+1) 
+    call allocate(dof, m-1, n-1, 8+1, 8+1) 
+!     call allocate(dof, 1, 1, 8+1, 8+1)   !! Ad-hoc No advection
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
 
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L
     call zeros(dof%psi)
-
+    
     call set(dof%K11, 0.5_dp*kappa_scale*sc)
     call set(dof%K22, 0.5_dp*kappa_scale*sc)
     call set(dof%K12, 0.0_dp*sc)
+    
 
     ! Read trajectory
-    call read_header(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char), T)
+!     call read_header(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char), T)
     call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
 
     ! Ensure the positions are normalised
@@ -1086,9 +1089,11 @@ contains
 
     ! Allocate array of jumps with initial positions
     call allocate(jumps, mesh)
+    call allocate(jumps_inv, mesh)
 
     ! Convert trajectory into jumps
     call traj2jumps(jumps, traj, mesh)
+    call traj2jumps_inv(jumps_inv, traj, mesh)
     call deallocate(traj)
 
     !call print_info(jumps, mesh)
@@ -1105,13 +1110,13 @@ contains
     call print_info(dof)
     call print_info(IndFn)
     call print_info(h, nts, sc)
-    
 
 !   likelihood for each indicator function
     allocate(logPost(IndFn%nIND))
     allocate(logPost_old(IndFn%nIND))
 
     ! MCMC
+    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_SSD, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
@@ -1121,13 +1126,17 @@ contains
     ! Set up stepsize for random sampling
     call set(dof_SSD%psi, 0.05_dp*psi_scale*sc)
 
-    call set(dof_SSD%K11, 0.0125_dp*kappa_scale*sc)
-    call set(dof_SSD%K22, 0.0125_dp*kappa_scale*sc)
+    call set(dof_SSD%K11, 0.05_dp*kappa_scale*sc)
+    call set(dof_SSD%K22, 0.05_dp*kappa_scale*sc)
     call set(dof_SSD%K12, 0.050_dp)
     
+    call reverse_dof_to_dof_inv(dof_inv, dof)
+
     ! Initialise
     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
     dof%SlogPost = real(sum(logPost), kind=dp)
+    call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
+    dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
     
     call set(dof_old, dof)
     logPost_old = logPost
@@ -1137,7 +1146,7 @@ contains
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
 
-    call write_theta(dof_old, trim(output_fld)//"theta_bilinear", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_bilinear_inv", sc, ind)
     
     call reset_timestep_timers()
     call reset_inference_timers()
@@ -1146,7 +1155,7 @@ contains
     ! write(6, *) "propose_dof_K: isotropic diffusivity"
     ! TODO: delete Adhoc
     
-    niter = max(4000, m*m)
+    niter = max(2000, m*m)
     do iter = 1, niter
       ! In each iteration loop over all cells
       do dof_id = 1, (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K)
@@ -1157,12 +1166,19 @@ contains
         ! Proposal
         call start(propose_timer)
         call propose_dof(dof, dof_id, dof_SSD)
+        call reverse_dof_to_dof_inv(dof_inv, dof)
+!         !! Ad-hoc No advection
+!         dof%psi%data(1,1) = 0.0_dp  ! Ad-hoc No advection
+!         !! Ad-hoc No advection
+
         !call propose_dof_all(dof, iter, dof_SSD)
         call stop(propose_timer)
         
         ! Evaluate likelihood
         call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
         dof%SlogPost = real(sum(logPost), kind=dp)
+        call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
+        dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
         
         ! Metropolis-Hastings
         alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
@@ -1188,12 +1204,12 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_bilinear", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_bilinear_inv", sc, ind)
       end if
     end do
 
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_bilinear", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_bilinear_inv", sc, -1)
 
     ! Release memory
     ! MH
@@ -1204,8 +1220,10 @@ contains
     call deallocate(dof_SSD)
     
     call deallocate(dof)
+    call deallocate(dof_inv)
     call deallocate(IndFn)
     call deallocate(jumps)
+    call deallocate(jumps_inv)
     
     ! Timer
     call stop(total_timer)
@@ -1226,216 +1244,198 @@ contains
 
   end subroutine unittest_inference_OMP
 
-!   subroutine unittest_FPsolver_INPUT()
-!     use mpi
-!     type(jumpsdat), dimension(:), pointer :: jumps
-!     type(trajdat) :: traj
-!     real(kind=dp) :: T
-! 
-!     integer :: m, n, cell, reflv
-!     type(meshdat) :: mesh
-! 
-!     type(dofdat) :: dof
-!     type(IndFndat) :: IndFn
-! 
-!     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-!     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+  subroutine unittest_FPsolver_INPUT()
+      use omp_lib
+    type(jumpsdat), dimension(:), pointer :: jumps
+    type(trajdat) :: traj
+    real(kind=dp) :: T
+
+    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    type(meshdat) :: mesh
+
+    type(dofdat) :: dof, dof_MAP, dof_old, dof_SSD
+    type(IndFndat) :: IndFn
+
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
 !     real(kind=dp), parameter :: psi_scale = 0.05_dp*L
-!     real(kind=dp) :: sc, h, dt
-!     integer :: nts
-!     real(kind=dp), dimension(:), allocatable :: logPost
-! 
-!     integer, parameter :: Td = 30
-!     character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-!     character(len = 256) :: output_fld, Td_char, q_output_fld
-! 
-!     ! MPI
-!     integer :: ierr, my_id, num_procs
-! 
-!     ! FP
-!     integer, dimension(:), allocatable :: klist
-!     type(dofdat) :: rdof
-!     type(field) :: q
-!     integer :: INDk, IND_read, write_ind
-!     
-!     ! Formulate dense matrix
-!     integer :: densemat_switch, dof_id
-!     real(kind=dp), dimension(:,:), allocatable :: QK
-!     real(kind=dp), dimension(:), allocatable :: q_unfold
-!     integer :: i0, j0, cmp, k
-! 
-!     call MPI_INIT( ierr )
-!     ! find out MY process ID, and how many processes were started.
-!     call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
-!     call MPI_COMM_SIZE(MPI_COMM_WORLD, num_procs, ierr)
-! 
-!     ! m, n: For DOF
-!     m = 16
-!     n = m
-!     reflv = 4
-!     
-!     write(output_fld, "(a,i0,a,a,a)") "./output/output", m, "/", RunProfile, "/"
-!     write(q_output_fld, "(a,i0,a,a,a)") "./unittest/q", m*reflv, "/", RunProfile, "/"
-!     if (my_id .eq. (num_procs-1)) then
-!       write(6, "(a, a)") "Reading from Output path: ", trim(output_fld)
-!     end if
-! 
-!     call allocate(mesh, m*reflv, n*reflv)
-!     call allocate(IndFn, 8, 8)
+    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+    real(kind=dp) :: sc, h, dt
+    integer :: nts, nts_sub, dt_rf
+    real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
+
+    integer :: dof_id
+    integer :: iter, niter, ind
+
+    integer, parameter :: Td = 32
+    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+    character(len = 256) :: output_fld, Td_char, resol_param
+    
+    type(dofdat) :: dof_solver
+    type(field) :: q
+    real(kind=dp) :: lik
+    integer, dimension(:), allocatable :: klist
+    integer :: INDk
+    
+    real(kind=dp) :: SlogPost, SlogPostr, alphaUniRV
+    
+    real(kind=dp), dimension(:,:), allocatable :: dJdm, dJdm_abs
+    real(kind=dp), dimension(:), allocatable :: theta, theta_old
+    
+    ! m, n: DOF/control
+    m = 16
+    n = 16
+    ! m_solver: solver grid
+    m_solver = 64
+    ! m_Ind, n_Ind: indicator functions
+    m_Ind = 16
+    n_Ind = m_Ind
+    
+    write(Td_char, "(a,i0,a)") "h", Td, "d"
+    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
+    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
+    write(6, "(a, a)") "Output path: ", trim(output_fld)
+    
+    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
+    call allocate(IndFn, m_Ind, n_Ind)
+
+    ! Initialise fields
+    sc = real(mesh%m,kind=dp)/L
+
+    call read_theta(dof, trim(output_fld)//"theta_sine", sc, 120)
+    
+    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
+    ! Ensure the positions are normalised
+    if (.not. check_normalised_pos(traj)) then
+      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
+    end if
+
+    ! Allocate array of jumps with initial positions
+    call allocate(jumps, mesh)
+
+    ! Convert trajectory into jumps
+    call traj2jumps(jumps, traj, mesh)
+    call deallocate(traj)
+
+    !call print_info(jumps, mesh)
+    
+    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
+    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
+
+    call allocate(dof_solver, mesh)
+    call intpl_dof_solver(dof_solver, dof, mesh)
+    
+    INDk = m_Ind*m_Ind/2+2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+    
+    !! dt = 3 hours
+    dt_rf = 1
+    dt = 3.0_dp*3600.0_dp/real(dt_rf, kind=dp)  ! 1.5 hours, in seconds
+    nts = int((h/sc)/dt)    ! 2 hours time step
+    call initialise_q(q, klist, mesh)
+
+    call write(q, "./unittest/q64/QGM2_L1/q32_sine1", 0.0_dp, 0)
+
+    call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h*0.75_dp, 3*nts/4)
+    call write(q, "./unittest/q64/QGM2_L1/q32_sine1", h*0.75_dp, 1)
+!      3hr@Posterior =   -1498342.09318808     
+!  0.375hr@Posterior =   -1498396.61044673
 !  
-!     ! Initialise fields
-!     sc = real(mesh%m,kind=dp)/L
+    call print_info(dof_solver%psi, h/real(nts,kind=dp))
+    
+    !! dt  = 0.375 hours
+    dt_rf = 8
+    dt = 3.0_dp*3600.0_dp/real(dt_rf, kind=dp)  ! 1.5 hours, in seconds
+    nts = int((h/sc)/dt)    ! 2 hours time step
+    call initialise_q(q, klist, mesh)
+
+    call write(q, "./unittest/q64/QGM2_L1/q32_sine8", 0.0_dp, 0)
+
+    call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
+    call write(q, "./unittest/q64/QGM2_L1/q32_sine8", h, 1)
+    
+    call print_info(dof_solver%psi, h/real(nts,kind=dp))
+    
+    
+    ! Test dJdm
+    allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+    allocate(theta_old(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+    
+    call read_theta(dof_old, trim(output_fld)//"theta_sine", sc, 119)
+    
+    call convert_dof_to_theta(theta, dof, 1.0_dp)
+    call convert_dof_to_theta(theta_old, dof_old, 1.0_dp)
+    
+    allocate(logPost(IndFn%nIND))
+    allocate(logPost_old(IndFn%nIND))
+    
+    call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+    call evaluate_loglik_OMP(logPost_old, jumps, IndFn, mesh, dof_old, h, nts)
+    
+    allocate(dJdm(size(logPost,1), size(theta, 1)))
+    
+    call compute_dJdm(dJdm, logPost, logPost_old, theta, theta_old)
+    
+    call print_array(dJdm, 'dJdm')
+    
+    
+    deallocate(dJdm)
+    
+    deallocate(theta)
+    deallocate(theta_old)
+    
+    call deallocate(dof_old)
+    
+    deallocate(logPost)
+    deallocate(logPost_old)
+    
+    ! Evaluate likelihood
+    allocate(logPost(IndFn%nIND))
+    
+!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!     SlogPost = real(sum(logPost), kind=dp)
+!     write(6, *) "3hr@Posterior = ", SlogPost
 !     
-!     ! Read dof
-!     IND_read = 50
-!     call read(dof, output_fld, sc, IND_read)
-!     !call set(dof%K12, 0.0_dp)
+!     ! Smaller timestep
+!     nts = nts*8
+!     logPost = 0.0_dp
+!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!     SlogPostr = real(sum(logPost), kind=dp)
+!     write(6, *) "0.375hr@Posterior = ", SlogPostr
+!       
+!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
+!     alphaUniRV = dexp(SlogPostr-SlogPost)
+!     write(6, *) "Relative acceptance = ", alphaUniRV
 !     
-!     ! Read trajectory
-!     write(Td_char, "(a,i0,a)") "h", Td, "d"
-!     call read_header(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char), T)
-!     call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
-! 
-!     ! Ensure the positions are normalised
-!     if (.not. check_normalised_pos(traj)) then
-!       call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
-!     end if
-! 
-!     ! Allocate array of jumps with initial positions
-!     call allocate(jumps, mesh)
-! 
-!     ! Convert trajectory
-!     call traj2jumps(jumps, traj, mesh)
-! 
-!     ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
-!     ! *m to rescale it from [0, 1] to [0, mesh%m]
-!     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)
-!     
-!     ! Calculate nts = number of timesteps needed in solving FP
-!     dt = 1.5_dp*3600.0_dp  ! 6 hours, in seconds
-!     nts = int((h/sc)/dt)
-! 
-!     if (my_id .eq. (num_procs-1)) then
-!       call print_info(dof)
-!       call print_info(mesh)
-!       call print_info(h, nts, sc)
-!     end if
-! 
-!     !   likelihood for each indicator function
-!     allocate(logPost(IndFn%nIND))
-!     
-!     ! Choose the tracer
-!     INDk = 37
-!     
-!     call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!     call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
-!     
-!     ! Solve FK equation
-!     call INDk_to_klist(klist, INDk, IndFn, mesh)
-!     
-!     call initialise_q(q, klist, mesh)
-!     call write(q, trim(q_output_fld)//"q", 0.0_dp, 0)
-! 
-!     do write_ind = 1, nts
-!       call advdiff_q(q, rdof%psi, rdof%K11, rdof%K22, rdof%K12, h/real(nts, kind=dp), 1)
-!   !     call advdiff_q(q, rdof%psi, rdof%K11, rdof%K22, rdof%K12, h, nts)
-!       call write(q, trim(q_output_fld)//"q", real(write_ind, kind=dp), write_ind)
-! 
-!       if (my_id .eq. (num_procs-1)) then
-!         call print_info(q)
-!         call print_info(rdof%psi, h/real(nts, kind=dp))
-!       end if
-!     end do
-!     
-!     call deallocate(rdof)
-!     call deallocate(q)
-!     deallocate(klist)
-! 
-!     ! Release memory
-!     call deallocate(traj)
+!     ! Perturb dof
 !     call deallocate(dof)
-! 
-! 
-!     do cell = 1, mesh%ncell
-!       call deallocate(jumps(cell))
-!     end do
-! 
-!     deallocate(logPost)
+!     call read_theta(dof, trim(output_fld)//"theta_sine", sc, 124)
+!     nts = 256*4
+!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!     SlogPostr = real(sum(logPost), kind=dp)
+!     write(6, *) "Perturb dof@Posterior = ", SlogPostr
 !     
-!     ! Assemble Qk
-!     densemat_switch = 1
-!     if (densemat_switch .eq. 1) then
-!       write(6, *) "Now assemble Qk"
-!       m = 16
-!       n = m
-!       reflv = 4
-!       call allocate(mesh, m*reflv, n*reflv)
-!       call allocate(dof, m, n, m, n)
-!       
-!       ! To determine size of Qk
-!       call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!       call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
+!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
+!     write(6, *) "Relative acceptance = ", alphaUniRV
 ! 
-!       allocate(Qk(size(q%data,1)*size(q%data,2), dof%ndof*3))
-!       allocate(q_unfold(size(q%data,1)*size(q%data, 2)))
-!       
-!       call deallocate(q)
-!       call deallocate(rdof)
-!       
-!       INDk = 37
-!       call INDk_to_klist(klist, INDk, IndFn, mesh)
-!       write(6, *) klist
-!       
-!       do dof_id = 1, dof%ndof
-!         i0 = k2i(dof_id, dof)
-!         j0 = k2j(dof_id, dof)
-!         call zeros(dof%psi)
-!           
-!         do cmp = 1, 3
-!           call zeros(dof%K11)
-!           call zeros(dof%K22)
-!           call zeros(dof%K12)
-!           if (cmp .eq. 1) dof%K11%data(i0, j0) = 1.0_dp
-!           if (cmp .eq. 2) dof%K22%data(i0, j0) = 1.0_dp
-!           if (cmp .eq. 3) dof%K12%data(i0, j0) = 1.0_dp
-!           
-!           call allocate(rdof, dof, mesh%m_reflv, mesh%n_reflv)
-!           call allocate(q, rdof%m, rdof%n, 'q', glayer=1,type_id=2)
-!           call initialise_q(q, klist, mesh)
-!           !call scale(q, 1000000.0_dp)
-!           call advdiff_q(q, rdof%psi, rdof%K11, rdof%K22, rdof%K12, h, nts)
-!           call print_info(h, nts, sc)
-!           call print_info(q)
-! 
-!           call unfold_matrix(q_unfold, q%data)
-!           do k = 1, size(q_unfold, 1)
-!             Qk(k, 3*(dof_id-1)+cmp) = q_unfold(k)
-!           end do
-!           
-!           call deallocate(q)
-!           call deallocate(rdof)
-!         end do
-!       end do
-!       
-!       
-!       !call print_array(Qk)
-!       if (my_id .eq. (num_procs-1)) then
-!         write(output_fld, "(a,i0,a)") "./unittest/Qk", m, "/"
-!         write(6, *) "Now writing text file"
-!         call write(Qk, trim(output_fld)//"Qk")
-!       end if
-!       
-!       deallocate(q_unfold)
-!       deallocate(Qk)
-!     end if
+!     nts = 256*8*4
+!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!     SlogPostr = real(sum(logPost), kind=dp)
+!     write(6, *) "1hr@Posterior = ", SlogPostr
 !     
-!     call deallocate(dof)
-!     call deallocate(IndFn)
-!     deallocate(klist)
-!     
-!     
-!     call MPI_FINALIZE( ierr )
-! 
-!   end subroutine unittest_FPsolver_INPUT
+!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
+!     write(6, *) "Relative acceptance = ", alphaUniRV
+    
+    deallocate(logPost)
+    call deallocate(jumps)
+    call deallocate(q)
+    deallocate(klist)
+    call deallocate(dof_solver)
+    
+    call deallocate(dof)
+    call deallocate(IndFn)
+
+  end subroutine unittest_FPsolver_INPUT
   
 end program advdiff

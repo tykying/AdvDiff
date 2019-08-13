@@ -1,6 +1,7 @@
 import sys
 
 data_folder = './unittest/q64/TTG_sinusoidal/'
+data_folder = './unittest/q64/QGM2_L1/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import numpy
@@ -16,7 +17,7 @@ fig, axarr = plt.subplots(1, 2, figsize=(12,6))
 def animate_full(ts):
   # Upper left panel: PDE solution
   ts_in = str(ts)
-  field_in = 'q'
+  field_in = 'q32_sine1'
   field_data = data_folder + field_in + '_' + ts_in
 
   name, tt, arr, glayer, type_id = field_io.read_field(field_data)
@@ -44,7 +45,7 @@ def animate_full(ts):
   axarr[1].set_ylim(y_logical[0], y_logical[-1])
   axarr[1].set_aspect('equal')
 
-ani = FuncAnimation(fig, animate_full, frames=range(0, 150, 10)) #, blit=True)
+ani = FuncAnimation(fig, animate_full, frames=range(1, 1+1, 1)) #, blit=True)
 #animate_full(0)
 plt.show()
 
