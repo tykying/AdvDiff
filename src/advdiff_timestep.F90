@@ -1053,6 +1053,8 @@ contains
 
     call start(assemble_timer)
 
+    K12%data = 0.0_dp
+    
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
     call imposeBC(K_e)
@@ -1065,6 +1067,7 @@ contains
     do i = 1, nts
       call timestep_heun_Kflux(q, dt, K_e)
       call timestep_LMT_2D(q, dt, uv_fld)
+!       call timestep_LMT_1DS(q, dt, uv_fld)
     end do
 
     call stop(timestep_timer)

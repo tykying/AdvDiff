@@ -985,7 +985,7 @@ contains
     
     call print_array(dof%K22%data)
     
-    call write_theta(dof, "./unittest/test_theta", sc, 1)
+     call write_theta(dof, "./unittest/test_theta", sc, 1)
 
     call print_info(dof)
     
@@ -1023,19 +1023,15 @@ contains
     real(kind=dp) :: sc, h, dt
     integer :: nts
     real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
+    real(kind=dp), dimension(:), allocatable :: canon, canon_old
 
-    integer :: dof_id
+    integer :: canon_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
     real(kind=dp), dimension(1) :: UniRV
 
     integer, parameter :: Td = 32
-!    character(len = *), parameter :: RunProfile = "K_TG_iso"
-!    character(len = *), parameter :: RunProfile = "K_sinusoidal"
-!    character(len = *), parameter :: RunProfile = "TTG_const"
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-!     character(len = *), parameter :: RunProfile = "K_const"
-!    character(len = *), parameter :: RunProfile = "TTG100_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
@@ -1043,6 +1039,9 @@ contains
     ! Timer
     type(timer), save :: total_timer, commun_timer, propose_timer
 
+    ! dJdm
+    real(kind=dp), dimension(:, :), allocatable :: dJdm, dJdm_sqsum, criteria
+    
     ! Timer
     call reset(total_timer)
     call reset(commun_timer)
@@ -1073,8 +1072,8 @@ contains
     sc = real(mesh%m,kind=dp)/L
     call zeros(dof%psi)
     
-    call set(dof%K11, 0.5_dp*kappa_scale*sc)
-    call set(dof%K22, 0.5_dp*kappa_scale*sc)
+    call set(dof%K11, 5.0_dp*kappa_scale*sc)
+    call set(dof%K22, 5.0_dp*kappa_scale*sc)
     call set(dof%K12, 0.0_dp*sc)
     
 
@@ -1104,6 +1103,7 @@ contains
     ! Calculate nts = number of timesteps needed in solving FP
     dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
     dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+!     dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
 
     call print_info(mesh)
@@ -1114,7 +1114,16 @@ contains
 !   likelihood for each indicator function
     allocate(logPost(IndFn%nIND))
     allocate(logPost_old(IndFn%nIND))
-
+    call allocate(canon, dof)
+    call allocate(canon_old, dof)
+    
+    allocate(dJdm(size(logPost,1), size(canon,1)))
+    allocate(dJdm_sqsum(size(logPost,1), size(canon,1)))
+    allocate(criteria(size(logPost,1), size(canon,1)))
+    dJdm = 0.0_dp
+    dJdm_sqsum = 0.0_dp
+    criteria = 0.0_dp 
+    
     ! MCMC
     call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
@@ -1124,29 +1133,37 @@ contains
     call init_random_seed();
     
     ! Set up stepsize for random sampling
-    call set(dof_SSD%psi, 0.05_dp*psi_scale*sc)
-
-    call set(dof_SSD%K11, 0.05_dp*kappa_scale*sc)
-    call set(dof_SSD%K22, 0.05_dp*kappa_scale*sc)
-    call set(dof_SSD%K12, 0.050_dp)
+    ! dof_SSD: By default zeros
+    ! Obtain canonical
+    do canon_id = 1, dof%ndof
+      call propose_dof_canon(dof, canon, canon_id, dof_SSD)
+    end do
     
+    ! Tune proposal distribution: SSD
+    call set(dof_SSD%psi, 0.05_dp*psi_scale*sc)
+    call set(dof_SSD%K11, 0.1_dp*kappa_scale*sc)
+    call set(dof_SSD%K22, 0.1_dp*kappa_scale*sc)
+    call set(dof_SSD%K12, 0.1_dp)
+    
+    ! Set reverse psi
     call reverse_dof_to_dof_inv(dof_inv, dof)
 
     ! Initialise
     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
     dof%SlogPost = real(sum(logPost), kind=dp)
-    call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
-    dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
+!     call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
+!     dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
     
     call set(dof_old, dof)
     logPost_old = logPost
+    canon_old = canon
     call set(dof_MAP, dof)
 
     ind = 0
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
 
-    call write_theta(dof_old, trim(output_fld)//"theta_bilinear_inv", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_canon", sc, ind)
     
     call reset_timestep_timers()
     call reset_inference_timers()
@@ -1155,30 +1172,33 @@ contains
     ! write(6, *) "propose_dof_K: isotropic diffusivity"
     ! TODO: delete Adhoc
     
-    niter = max(2000, m*m)
+    niter = max(2500, m*m)
     do iter = 1, niter
       ! In each iteration loop over all cells
-      do dof_id = 1, (dof%m_psi*dof%n_psi + dof%m_K*dof%n_K)
+      do canon_id = 1, dof%ndof
         ! Initialise K_prop
         call set(dof, dof_old)
         logPost = logPost_old
-
+        canon = canon_old
+        
         ! Proposal
-        call start(propose_timer)
-        call propose_dof(dof, dof_id, dof_SSD)
+        call propose_dof_canon(dof, canon, canon_id, dof_SSD)
+!         call propose_dof(dof, canon_id, dof_SSD)
         call reverse_dof_to_dof_inv(dof_inv, dof)
 !         !! Ad-hoc No advection
 !         dof%psi%data(1,1) = 0.0_dp  ! Ad-hoc No advection
 !         !! Ad-hoc No advection
-
         !call propose_dof_all(dof, iter, dof_SSD)
-        call stop(propose_timer)
         
         ! Evaluate likelihood
-        call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!        call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+        call evaluate_loglik_guided(logPost, jumps, IndFn, mesh, dof, h, nts, canon_id, criteria)
         dof%SlogPost = real(sum(logPost), kind=dp)
-        call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
-        dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
+!         call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
+!         dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
+        
+        ! Evaluate dJdm
+        call compute_dJdm_Cid(dJdm, logPost, logPost_old, canon, canon_old, canon_id)
         
         ! Metropolis-Hastings
         alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
@@ -1187,7 +1207,8 @@ contains
         if (UniRV(1) < alphaUniRV) then
           call set(dof_old, dof)
           logPost_old = logPost
-          dof_old%occurrence = 0
+          canon_old = canon
+          dof_old%occurrence = 1
         else
           dof%occurrence = dof%occurrence + 1
         end if
@@ -1197,28 +1218,44 @@ contains
           call set(dof_MAP, dof)
         end if
       end do
-
+      
+      ! dJdm
+      dJdm_sqsum = dJdm_sqsum + dJdm*dJdm
+      dJdm = 0.0_dp
+      
       ! I/O
       if (mod(iter, 10) .eq. 0) then
         write(6, "(i0, a, "//dp_chr//")") iter, "-th step: logPost = ", dof_old%SlogPost
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_bilinear_inv", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_canon", sc, ind)
+        
+        if (iter .eq. 50) then
+          criteria = dJdm_sqsum
+          dJdm_sqsum = 0.0
+          call write(criteria, trim(output_fld)//"criteria")
+        end if
       end if
     end do
 
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_bilinear_inv", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_canon", sc, -1)
 
     ! Release memory
     ! MH
+    deallocate(dJdm)
+    deallocate(dJdm_sqsum)
+    deallocate(criteria)
+    deallocate(canon)
+    deallocate(canon_old)
+    
     deallocate(logPost_old)
     deallocate(logPost)
     call deallocate(dof_old)
     call deallocate(dof_MAP)
     call deallocate(dof_SSD)
-    
+
     call deallocate(dof)
     call deallocate(dof_inv)
     call deallocate(IndFn)
@@ -1270,12 +1307,13 @@ contains
     integer, parameter :: Td = 32
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
-    
+    character(len = 256) :: output_q
+
     type(dofdat) :: dof_solver
     type(field) :: q
     real(kind=dp) :: lik
     integer, dimension(:), allocatable :: klist
-    integer :: INDk
+    integer :: INDk, i
     
     real(kind=dp) :: SlogPost, SlogPostr, alphaUniRV
     
@@ -1302,7 +1340,7 @@ contains
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L
 
-    call read_theta(dof, trim(output_fld)//"theta_sine", sc, 120)
+    call read_theta(dof, trim(output_fld)//"theta_canon", sc, 38)
     
     call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
     ! Ensure the positions are normalised
@@ -1341,7 +1379,134 @@ contains
     call write(q, "./unittest/q64/QGM2_L1/q32_sine1", h*0.75_dp, 1)
 !      3hr@Posterior =   -1498342.09318808     
 !  0.375hr@Posterior =   -1498396.61044673
-!  
+
+    ! Output video
+    INDk = m_Ind*m_Ind/2+2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+m_Ind+2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+m_Ind+2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/qr", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 32)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+
+    INDk = m_Ind*m_Ind/2-m_Ind+2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+
+    INDk = m_Ind*m_Ind/2-m_Ind+1
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+1
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+m_Ind+1
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+m_Ind+1
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/qr", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 256)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    INDk = m_Ind*m_Ind/2+m_Ind/2
+    call INDk_to_klist(klist, INDk, IndFn, mesh)
+    write(6, *) INDk
+    write(6, *) h/sc/(3600.0_dp*24.0_dp)
+    call initialise_q(q, klist, mesh)
+    
+    write(output_q, "(a, i0)") "./unittest/q64/QGM2_L1/q", INDk
+    call write(q, trim(output_q), 0.0_dp, 0)
+
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
     call print_info(dof_solver%psi, h/real(nts,kind=dp))
     
     !! dt  = 0.375 hours
@@ -1357,39 +1522,71 @@ contains
     
     call print_info(dof_solver%psi, h/real(nts,kind=dp))
     
+
     
-    ! Test dJdm
-    allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
-    allocate(theta_old(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+    ! Test canon conversion
+    call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
+    call set(dof_old, dof)
     
-    call read_theta(dof_old, trim(output_fld)//"theta_sine", sc, 119)
+    call allocate(theta, dof)
+    call convert_dof_to_canon(theta, dof)
+    call convert_canon_to_dof(dof, theta)
     
-    call convert_dof_to_theta(theta, dof, 1.0_dp)
-    call convert_dof_to_theta(theta_old, dof_old, 1.0_dp)
+    if (iszero(dof_old%psi%data-dof%psi%data)) then
+      write(6, *) "P: Consistent psi"
+    else
+      call abort_handle("F: Inconsistent canonical conversion - psi", __FILE__, __LINE__)
+    end if
     
-    allocate(logPost(IndFn%nIND))
-    allocate(logPost_old(IndFn%nIND))
+    if (iszero(dof_old%K11%data-dof%K11%data)) then
+      write(6, *) "P: Consistent K11"
+    else
+      call abort_handle("F: Inconsistent canonical conversion - K11", __FILE__, __LINE__)
+    end if
     
-    call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-    call evaluate_loglik_OMP(logPost_old, jumps, IndFn, mesh, dof_old, h, nts)
+    if (iszero(dof_old%K22%data-dof%K22%data)) then
+      write(6, *) "P: Consistent K22"
+    else
+      call abort_handle("F: Inconsistent canonical conversion - K22", __FILE__, __LINE__)
+    end if
     
-    allocate(dJdm(size(logPost,1), size(theta, 1)))
-    
-    call compute_dJdm(dJdm, logPost, logPost_old, theta, theta_old)
-    
-    call print_array(dJdm, 'dJdm')
-    
-    
-    deallocate(dJdm)
-    
-    deallocate(theta)
-    deallocate(theta_old)
+    if (iszero(dof_old%K12%data-dof%K12%data)) then
+      write(6, *) "P: Consistent K12"
+    else
+      call abort_handle("F: Inconsistent canonical conversion - K12", __FILE__, __LINE__)
+    end if
     
     call deallocate(dof_old)
-    
-    deallocate(logPost)
-    deallocate(logPost_old)
-    
+    deallocate(theta)
+
+!     ! Test dJdm
+!     allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+!     allocate(theta_old(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+!     allocate(logPost(IndFn%nIND))
+!     allocate(logPost_old(IndFn%nIND))
+!     
+!     call read_theta(dof_old, trim(output_fld)//"theta_sine", sc, 119)
+!     
+!     call convert_dof_to_theta(theta, dof, 1.0_dp)
+!     call convert_dof_to_theta(theta_old, dof_old, 1.0_dp)
+!     
+!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
+!     call evaluate_loglik_OMP(logPost_old, jumps, IndFn, mesh, dof_old, h, nts)
+!     
+!     allocate(dJdm(size(logPost,1), size(theta, 1)))
+!     
+!     call compute_dJdm(dJdm, logPost, logPost_old, theta, theta_old)
+!     
+!     call print_array(dJdm, 'dJdm')
+!     
+!     deallocate(dJdm)
+!     deallocate(theta)
+!     deallocate(theta_old)
+!     call deallocate(dof_old)
+!     deallocate(logPost)
+!     deallocate(logPost_old)
+!     ! End Test dJdm
+
     ! Evaluate likelihood
     allocate(logPost(IndFn%nIND))
     

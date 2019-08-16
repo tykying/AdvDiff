@@ -13,7 +13,6 @@ module advdiff_io
   private
 
   public :: read_header, read, write, read_theta
-  public :: convert_dof_to_theta
 
   interface read_header
     module procedure read_field_header, read_traj_header
@@ -328,7 +327,7 @@ contains
     dof%n_psi = dof%psi%n
     dof%m_K = dof%K11%m
     dof%n_K = dof%K11%n
-    dof%ndof = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+    dof%ndof = dof%m_psi*dof%n_psi + 3*dof%m_K*dof%n_K
     dof%SlogPost = SlogPost
     dof%occurrence = 1
 
@@ -339,100 +338,6 @@ contains
     call scale(dof%K12, sc)
     
   end subroutine read_dof
-
-  subroutine allocate_theta(theta, dof)
-    real(kind=dp), dimension(:), allocatable, intent(out) :: theta
-    type(dofdat), intent(in) :: dof
-    
-    integer :: theta_len
-    
-    theta_len = 0
-    theta_len = theta_len + size(dof%psi%data,1)*size(dof%psi%data,2)
-    theta_len = theta_len + size(dof%K11%data,1)*size(dof%K11%data,2)
-    theta_len = theta_len + size(dof%K22%data,1)*size(dof%K22%data,2)
-    theta_len = theta_len + size(dof%K12%data,1)*size(dof%K12%data,2)
-    
-    allocate(theta(theta_len))
-
-  end subroutine allocate_theta
-  
-  subroutine convert_dof_to_theta(theta, dof, rsc)
-    real(kind=dp), dimension(:), intent(inout) :: theta
-    type(dofdat), intent(in) :: dof
-    real(kind = dp), intent(in) :: rsc
-
-    integer :: i, j, k
-    
-    k = 0
-    ! Psi
-    do j = 1, size(dof%psi%data, 2)
-      do i = 1, size(dof%psi%data, 1)
-        k = k + 1
-        theta(k) = dof%psi%data(i, j) *rsc
-      end do
-    end do
-    ! K11
-    do j = 1, size(dof%K11%data, 2)
-      do i = 1, size(dof%K11%data, 1)
-        k = k + 1
-        theta(k) = dof%K11%data(i, j) *rsc
-      end do
-    end do
-    ! K22
-    do j = 1, size(dof%K22%data, 2)
-      do i = 1, size(dof%K22%data, 1)
-        k = k + 1
-        theta(k) = dof%K22%data(i, j) *rsc
-      end do
-    end do
-    ! K12
-    do j = 1, size(dof%K12%data, 2)
-      do i = 1, size(dof%K12%data, 1)
-        k = k + 1
-        theta(k) = dof%K12%data(i, j) *rsc
-      end do
-    end do
-    
-  end subroutine convert_dof_to_theta
-  
-  subroutine convert_theta_to_dof(dof, theta, sc)
-    type(dofdat), intent(in) :: dof
-    real(kind=dp), dimension(:), intent(in) :: theta
-    real(kind = dp), intent(in) :: sc
-
-    integer :: i, j, k
-    
-    k = 0
-    ! Psi
-    do j = 1, size(dof%psi%data, 2)
-      do i = 1, size(dof%psi%data, 1)
-        k = k + 1
-        dof%psi%data(i, j) = theta(k) *sc
-      end do
-    end do
-    ! K11
-    do j = 1, size(dof%K11%data, 2)
-      do i = 1, size(dof%K11%data, 1)
-        k = k + 1
-        dof%K11%data(i, j) = theta(k) *sc
-      end do
-    end do
-    ! K22
-    do j = 1, size(dof%K22%data, 2)
-      do i = 1, size(dof%K22%data, 1)
-        k = k + 1
-        dof%K22%data(i, j) = theta(k) *sc
-      end do
-    end do
-    ! K12
-    do j = 1, size(dof%K12%data, 2)
-      do i = 1, size(dof%K12%data, 1)
-        k = k + 1
-        dof%K12%data(i, j) = theta(k) *sc
-      end do
-    end do
-    
-  end subroutine convert_theta_to_dof
   
   subroutine write_theta(dof, filename, sc, index)
     type(dofdat), intent(in) :: dof
@@ -472,7 +377,7 @@ contains
     write(output_unit, "(i0)") dof%occurrence
     close(output_unit)
     
-    allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
+    call allocate(theta, dof)
     call convert_dof_to_theta(theta, dof, rsc)
 
     open(unit = output_unit, file = trim(lfilename) // ".dat", &
@@ -546,7 +451,7 @@ contains
 
     call read_theta_header(dof, filename, index)
     
-    call allocate_theta(theta, dof)
+    call allocate(theta, dof)
     
     write(6, *) "Reading: "// trim(lfilename) // ".dat"
     

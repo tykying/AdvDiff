@@ -16,8 +16,8 @@ make clean
 make
 
 date
-#nohup ./advdiff > mon_advdiff32_QG_bilinear_h32d_inv.txt &
-#nohup ./advdiff > mon_advdiff64_TTG_bilinear.txt &
+#nohup ./advdiff > mon_advdiff_bilinear_h32d_canon.txt &
+#nohup ./advdiff > mon_advdiff64_TTG_bilinear_2.txt &
 ./advdiff
 
 date 
