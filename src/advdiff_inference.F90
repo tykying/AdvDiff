@@ -20,7 +20,6 @@ module advdiff_inference
   public :: compute_dJdm_Cid
   public :: convert_dof_to_theta, convert_theta_to_dof
   public :: convert_dof_to_canon, convert_canon_to_dof
-  
 
   type dofdat
     integer :: m_psi, n_psi
@@ -29,6 +28,7 @@ module advdiff_inference
     type(field) :: psi, K11, K22, K12
     integer :: occurrence
     real(kind=dp) :: SlogPost
+    real(kind=dp), dimension(:), pointer :: canon
   end type dofdat
   
   type IndFndat
@@ -86,6 +86,9 @@ contains
     dof%occurrence = 0
     dof%SlogPost = 0.0_dp
    
+    ! canonical
+    allocate(dof%canon(dof%ndof))
+
   end subroutine allocate_dof
 
   subroutine deallocate_dof(dof)
@@ -95,6 +98,8 @@ contains
     call deallocate(dof%K11)
     call deallocate(dof%K22)
     call deallocate(dof%K12)
+    
+    deallocate(dof%canon)
 
   end subroutine deallocate_dof
   
@@ -122,6 +127,31 @@ contains
       call abort_handle("dim(mesh) inconsistent with indicator functions m_ind, n_ind", __FILE__, __LINE__)
     
   end subroutine validate_IndFn
+  
+  subroutine init_dof(dof, sc)
+    type(dofdat), intent(inout) :: dof
+    real(kind=dp), optional, intent(in) :: sc
+    
+    real(kind=dp) :: ssc
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+    
+    if (present(sc)) then
+      ssc = sc
+    else
+      ssc = 1.0_dp
+    end if
+    
+    ! Initialise dof
+    call zeros(dof%psi)
+    call set(dof%K11, 5.0_dp*kappa_scale*ssc)
+    call set(dof%K22, 5.0_dp*kappa_scale*ssc)
+    call set(dof%K12, 0.0_dp*kappa_scale*ssc)
+    
+    call imprint_canon(dof)
+    
+  end subroutine init_dof
 
   subroutine set_dof(dof, dof_in)
     type(dofdat), intent(out) :: dof
@@ -134,6 +164,8 @@ contains
 
     dof%SlogPost = dof_in%SlogPost
     dof%occurrence = dof_in%occurrence
+    
+    dof%canon = dof_in%canon
     
   end subroutine set_dof
   
@@ -358,6 +390,9 @@ contains
     dof_solver%occurrence = 0
     dof_solver%SlogPost = 0.0_dp
     
+    allocate(dof_solver%canon(1))
+    dof_solver%canon(1) = 0.0_dp
+    
   end subroutine allocate_dof_solver
   
   subroutine intpl_dof_solver(dof_solver, dof, mesh)
@@ -435,28 +470,290 @@ contains
 
   end function is_nneg
   
-  subroutine propose_dof_canon(dof, canon, dof_id, dof_SSD)
+  subroutine init_canon_SSD(canon_SSD, dof, sc)
+    real(kind=dp), dimension(:), intent(inout) :: canon_SSD
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), optional, intent(in) :: sc
+    
+    real(kind=dp) :: ssc
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+    
+    integer :: k, list_i, list_f
+    
+    if (present(sc)) then
+      ssc = sc
+    else
+      ssc = 1.0_dp
+    end if
+    
+    ! psi
+    list_i = 1
+    list_f = dof%m_psi*dof%n_psi
+    do k = list_i, list_f
+      canon_SSD(k) = 0.05_dp*psi_scale*ssc
+    end do
+    
+    ! sigma1_sq, sigma2_sq 
+    list_i = dof%m_psi*dof%n_psi + 1
+    list_f = dof%m_psi*dof%n_psi + 2*dof%m_K*dof%n_K
+    do k = list_i, list_f
+      canon_SSD(k) = 0.1_dp*kappa_scale*ssc
+    end do
+    
+    ! phi
+    list_i = dof%m_psi*dof%n_psi + 2*dof%m_K*dof%n_K + 1
+    list_f = dof%m_psi*dof%n_psi + 3*dof%m_K*dof%n_K
+    do k = list_i, list_f
+      canon_SSD(k) = 0.1_dp
+    end do
+
+  end subroutine init_canon_SSD
+  
+  subroutine imprint_canon(dof, canon_id)
+    type(dofdat), intent(inout) :: dof
+    integer, optional, intent(in) :: canon_id
+    
+    integer :: loop_i, loop_f, cid, i0, j0
+    integer :: psi_id, K_id, Kloc_id
+    integer :: ncid, Kcmp1, Kcmp2, Kcmp3
+    
+    real(kind=dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
+    
+    ncid = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+    
+    if (present(canon_id)) then
+      loop_i = canon_id
+      loop_f = canon_id
+    else
+      loop_i = 1
+      loop_f = ncid
+    end if
+    
+    do cid = loop_i, loop_f
+      if (cid .le. dof%m_psi*dof%n_psi) then
+        ! psi
+        psi_id = cid
+      
+        i0 = k2i(psi_id, dof%m_psi)
+        j0 = k2j(psi_id, dof%m_psi)
+    
+        dof%canon(cid) = dof%psi%data(i0,j0)
+      else
+        ! K
+        K_id = cid - dof%m_psi*dof%n_psi
+        
+!         cmp = (K_id-1)/(dof%m_K*dof%n_K)
+        Kloc_id = mod(K_id-1, dof%m_K*dof%n_K)+1
+        
+        i0 = k2i(Kloc_id, dof%m_K)
+        j0 = k2j(Kloc_id, dof%m_K)
+      
+        ! K: defined at corners
+        Kxx = dof%K11%data(i0,j0)
+        Kyy = dof%K22%data(i0,j0)
+        Kxy = dof%K12%data(i0,j0)
+      
+        call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
+      
+        ! Update all 
+        Kcmp1 = dof%m_psi*dof%n_psi
+        Kcmp2 = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+        Kcmp3 = dof%m_psi*dof%n_psi + 2*dof%m_K*dof%n_K
+
+        dof%canon(Kcmp1 + Kloc_id) = sigma1_sq
+        dof%canon(Kcmp2 + Kloc_id) = sigma2_sq
+        dof%canon(Kcmp3 + Kloc_id) = phi_K
+      end if
+      
+!       write(6, *) "cid, i0, j0 = ", cid, i0, j0
+    end do
+    
+  end subroutine imprint_canon
+  
+  subroutine convert_dof_to_canon(canon, dof, canon_id)
+    real(kind = dp), dimension(:), intent(inout) :: canon
+    type(dofdat), intent(in) :: dof
+    integer, optional, intent(in) :: canon_id
+    
+    integer :: loop_i, loop_f, cid, i0, j0
+    integer :: psi_id, K_id, Kloc_id
+    integer :: ncid, Kcmp1, Kcmp2, Kcmp3
+    
+    real(kind=dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
+    
+    ncid = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+    
+    if (present(canon_id)) then
+      loop_i = canon_id
+      loop_f = canon_id
+    else
+      loop_i = 1
+      loop_f = ncid
+    end if
+    
+    do cid = loop_i, loop_f
+      if (cid .le. dof%m_psi*dof%n_psi) then
+        ! psi
+        psi_id = cid
+      
+        i0 = k2i(psi_id, dof%m_psi)
+        j0 = k2j(psi_id, dof%m_psi)
+    
+        canon(cid) = dof%psi%data(i0,j0)
+      else
+        ! K
+        K_id = cid - dof%m_psi*dof%n_psi
+        
+!         cmp = (K_id-1)/(dof%m_K*dof%n_K)
+        Kloc_id = mod(K_id-1, dof%m_K*dof%n_K)+1
+        
+        i0 = k2i(Kloc_id, dof%m_K)
+        j0 = k2j(Kloc_id, dof%m_K)
+      
+        ! K: defined at corners
+        Kxx = dof%K11%data(i0,j0)
+        Kyy = dof%K22%data(i0,j0)
+        Kxy = dof%K12%data(i0,j0)
+      
+        call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
+      
+        ! Update all 
+        Kcmp1 = dof%m_psi*dof%n_psi
+        Kcmp2 = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+        Kcmp3 = dof%m_psi*dof%n_psi + 2*dof%m_K*dof%n_K
+
+        canon(Kcmp1 + Kloc_id) = sigma1_sq
+        canon(Kcmp2 + Kloc_id) = sigma2_sq
+        canon(Kcmp3 + Kloc_id) = phi_K
+      end if
+      
+!       write(6, *) "cid, i0, j0 = ", cid, i0, j0
+    end do
+    
+  end subroutine convert_dof_to_canon
+  
+  subroutine convert_canon_to_dof(dof, canon, canon_id)
+    type(dofdat), intent(inout) :: dof
+    real(kind = dp), dimension(:), intent(in) :: canon
+    integer, optional, intent(in) :: canon_id
+    
+    integer :: loop_i, loop_f, cid, i0, j0
+    integer :: psi_id, K_id, Kloc_id
+    integer :: ncid, Kcmp1, Kcmp2, Kcmp3
+    
+    real(kind=dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
+    
+    ncid = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+    
+    ! No given canon_id => all
+    if (present(canon_id)) then
+      loop_i = canon_id
+      loop_f = canon_id
+    else
+      loop_i = 1
+      loop_f = ncid
+    end if
+    
+    do cid = loop_i, loop_f
+      if (cid .le. dof%m_psi*dof%n_psi) then
+        ! psi
+        psi_id = cid
+      
+        i0 = k2i(psi_id, dof%m_psi)
+        j0 = k2j(psi_id, dof%m_psi)
+    
+        dof%psi%data(i0,j0) = canon(cid)
+      else
+        ! K
+        K_id = cid - dof%m_psi*dof%n_psi
+        
+        Kloc_id = mod(K_id-1, dof%m_K*dof%n_K)+1
+        
+        Kcmp1 = dof%m_psi*dof%n_psi
+        Kcmp2 = dof%m_psi*dof%n_psi + dof%m_K*dof%n_K
+        Kcmp3 = dof%m_psi*dof%n_psi + 2*dof%m_K*dof%n_K
+        
+        sigma1_sq = canon(Kcmp1 + Kloc_id)
+        sigma2_sq = canon(Kcmp2 + Kloc_id)
+        phi_K = canon(Kcmp3 + Kloc_id)
+        call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
+        
+        i0 = k2i(Kloc_id, dof%m_K)
+        j0 = k2j(Kloc_id, dof%m_K)
+        
+        ! K: defined at corners
+        dof%K11%data(i0,j0) = Kxx
+        dof%K22%data(i0,j0) = Kyy
+        dof%K12%data(i0,j0) = Kxy
+      end if
+      
+!       write(6, *) "cid, i0, j0 = ", cid, i0, j0
+    end do
+    
+  end subroutine convert_canon_to_dof
+  
+  pure real(kind=dp) function evaluate_logprior(dof, sc)
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), intent(in) :: sc
+    integer :: cid, list_i, list_f
+    
+    logical :: inrange
+    
+    list_i = dof%m_psi*dof%n_psi+1
+    list_f = dof%m_psi*dof%n_psi+2*dof%m_K*dof%n_K
+    
+    inrange = .TRUE.
+    do cid = list_i, list_f
+      if ((dof%canon(cid) .le. 100.0_dp*sc) .or. (dof%canon(cid) .gt. 1E8*sc)) then  
+        inrange = .FALSE.
+      end if
+    end do
+    
+    if (inrange) then
+      evaluate_logprior = 0.0_dp
+    else
+      evaluate_logprior = -1E15
+    end if
+
+  end function evaluate_logprior
+  
+  subroutine propose_dof_canon2(dof, canon_SSD, canon_id)
+    type(dofdat), intent(inout) :: dof
+    real(kind = dp), dimension(:), intent(in) :: canon_SSD
+    integer, intent(in) :: canon_id
+    
+    real(kind=dp), dimension(:), allocatable :: canon
+        
+    dof%canon(canon_id) = dof%canon(canon_id) + canon_SSD(canon_id)*randn()
+    
+    call convert_canon_to_dof(dof, dof%canon, canon_id)
+    
+  end subroutine propose_dof_canon2
+  
+  subroutine propose_dof_canon(dof, canon, canon_id, dof_SSD)
     type(dofdat), intent(inout) :: dof
     real(kind = dp), dimension(:), intent(inout) :: canon
-    integer, intent(in) :: dof_id
+    integer, intent(in) :: canon_id
     type(dofdat), intent(in) :: dof_SSD
     
     integer :: psi_id, K_id, cmp
     integer :: i0, j0
     real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
     
-    if (dof_id .le. dof%m_psi*dof%n_psi) then
+    if (canon_id .le. dof%m_psi*dof%n_psi) then
       ! psi
-      psi_id = dof_id
+      psi_id = canon_id
       
       i0 = k2i(psi_id, dof%m_psi)
       j0 = k2j(psi_id, dof%m_psi)
     
       dof%psi%data(i0,j0) = dof%psi%data(i0,j0) + dof_SSD%psi%data(i0,j0)*randn()
-      canon(dof_id) = dof%psi%data(i0,j0)
+      canon(canon_id) = dof%psi%data(i0,j0)
     else
       ! K
-      K_id = dof_id - dof%m_psi*dof%n_psi
+      K_id = canon_id - dof%m_psi*dof%n_psi
       
       if (K_id .le. dof%m_K*dof%n_K) then
         cmp = 0       ! Kxx
@@ -483,13 +780,13 @@ contains
       ! Perturbation
       if (cmp .eq. 0) then
         sigma1_sq = dabs(sigma1_sq + dof_SSD%K11%data(i0,j0)*randn() )
-        canon(dof_id) = sigma1_sq
+        canon(canon_id) = sigma1_sq
       elseif (cmp .eq. 1) then
         sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i0,j0)*randn() )
-        canon(dof_id) = sigma2_sq
+        canon(canon_id) = sigma2_sq
       elseif (cmp .eq. 2) then
         phi_K = phi_K + dof_SSD%K12%data(i0,j0)*randn()
-        canon(dof_id) = phi_K
+        canon(canon_id) = phi_K
       end if
       
       call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
@@ -676,76 +973,6 @@ contains
     allocate(theta(theta_len))
 
   end subroutine allocate_theta
-  
-  subroutine convert_dof_to_canon(canon, dof)
-    real(kind=dp), dimension(:), intent(inout) :: canon
-    type(dofdat), intent(in) :: dof
-
-    integer :: i, j, k
-    real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
-
-    k = 0
-    ! Psi
-    do j = 1, size(dof%psi%data, 2)
-      do i = 1, size(dof%psi%data, 1)
-        k = k + 1
-        canon(k) = dof%psi%data(i, j)
-      end do
-    end do
-
-    ! K
-    do j = 1, size(dof%K11%data, 2)
-      do i = 1, size(dof%K11%data, 1)
-        Kxx = dof%K11%data(i,j)
-        Kyy = dof%K22%data(i,j)
-        Kxy = dof%K12%data(i,j)
-        call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
-    
-        k = k + 1
-        canon(k) = sigma1_sq
-        k = k + 1
-        canon(k) = sigma2_sq
-        k = k + 1
-        canon(k) = phi_K
-      end do
-    end do
-    
-  end subroutine convert_dof_to_canon
-  
-  subroutine convert_canon_to_dof(dof, canon)
-    real(kind=dp), dimension(:), intent(in) :: canon
-    type(dofdat), intent(out) :: dof
-
-    integer :: i, j, k
-    real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
-
-    k = 0
-    ! Psi
-    do j = 1, size(dof%psi%data, 2)
-      do i = 1, size(dof%psi%data, 1)
-        k = k + 1
-        dof%psi%data(i, j) = canon(k)
-      end do
-    end do
-
-    ! K
-    do j = 1, size(dof%K11%data, 2)
-      do i = 1, size(dof%K11%data, 1)
-        k = k + 1
-        sigma1_sq = canon(k)
-        k = k + 1
-        sigma2_sq = canon(k)
-        k = k + 1
-        phi_K = canon(k)
-        call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
-        
-        dof%K11%data(i,j) = Kxx
-        dof%K22%data(i,j) = Kyy
-        dof%K12%data(i,j) = Kxy
-      end do
-    end do
-    
-  end subroutine convert_canon_to_dof
   
   subroutine convert_dof_to_theta(theta, dof, rsc)
     real(kind=dp), dimension(:), intent(inout) :: theta
