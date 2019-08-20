@@ -1052,7 +1052,8 @@ contains
     real(kind=dp) :: sc, h, dt
     integer :: nts
     real(kind=dp), dimension(:), allocatable :: logPost, canon_SSD
-
+    real(kind=dp) :: logPrior
+    
     integer :: canon_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
@@ -1061,7 +1062,7 @@ contains
     integer, parameter :: Td = 32
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
@@ -1096,7 +1097,7 @@ contains
     call allocate(IndFn, m_Ind, n_Ind)
 
     ! Initialise fields
-    sc = real(mesh%m,kind=dp)/L    
+    sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
     call init_dof(dof, sc)
 
     ! Read trajectory
@@ -1124,7 +1125,7 @@ contains
     ! Calculate nts = number of timesteps needed in solving FP
     dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
     dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-!     dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
 
     call print_info(mesh)
@@ -1170,7 +1171,7 @@ contains
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
     
-    call write_theta(dof_old, trim(output_fld)//"theta_prior", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_prior2", sc, ind)
     
     call reset_timestep_timers()
     call reset_inference_timers()
@@ -1191,26 +1192,28 @@ contains
         !call propose_dof_all(dof, iter, dof_SSD)
         
         ! Evaluate likelihood
-        if (evaluate_logprior(dof, sc) .gt. -1E14) then
+        call evaluate_logPrior(logPrior, dof, sc)
+        if (logPrior .gt. -1E14) then
           call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
 !            call evaluate_loglik_guided(logPost, jumps, IndFn, mesh, dof, h, nts, canon_id, criteria)
           dof%SlogPost = real(sum(logPost), kind=dp)
-        end if
+
 !         call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
 !         dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
         
 !         ! Evaluate dJdm
 !         call compute_dJdm_Cid(dJdm, logPost, logPost_old, canon, canon_old, canon_id)
         
-        ! Metropolis-Hastings
-        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
-        call RANDOM_NUMBER(UniRV)
+          ! Metropolis-Hastings
+          alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
+          call RANDOM_NUMBER(UniRV)
 
-        if (UniRV(1) < alphaUniRV) then
-          call set(dof_old, dof)
-!           logPost_old = logPost
-!           canon_old = canon
-          dof_old%occurrence = 1
+          if (UniRV(1) < alphaUniRV) then
+            call set(dof_old, dof)
+!             logPost_old = logPost
+!             canon_old = canon
+            dof_old%occurrence = 1
+          end if
         else
           dof%occurrence = dof%occurrence + 1
         end if
@@ -1231,7 +1234,7 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_prior", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_prior2", sc, ind)
         
 !         if (iter .eq. 50) then
 !           criteria = dJdm_sqsum
@@ -1242,7 +1245,7 @@ contains
     end do
 
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_prior", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_prior2", sc, -1)
 
     ! Release memory
     ! MH

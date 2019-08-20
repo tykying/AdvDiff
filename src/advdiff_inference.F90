@@ -134,7 +134,8 @@ contains
     
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+!     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
     real(kind=dp), parameter :: psi_scale = 0.1_dp*L
     
     if (present(sc)) then
@@ -478,7 +479,8 @@ contains
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+!    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+    real(kind=dp), parameter :: psi_scale = 0.01_dp*L  ! Layer 2
     
     integer :: k, list_i, list_f
     
@@ -694,30 +696,72 @@ contains
     
   end subroutine convert_canon_to_dof
   
-  pure real(kind=dp) function evaluate_logprior(dof, sc)
+  subroutine evaluate_logPrior(logPrior, dof, sc)
+    real(kind=dp), intent(out) :: logPrior
     type(dofdat), intent(in) :: dof
     real(kind=dp), intent(in) :: sc
     integer :: cid, list_i, list_f
-    
+    integer :: i0, j0
+    type(meshdat) :: mesh
+    type(dofdat) :: dof_solver
+    real(kind=dp), dimension(:,:), allocatable :: u, v
+
     logical :: inrange
+    
+    call allocate(mesh, dof%m_psi+1, dof%m_psi+1)  ! Needs to be identical in both directions
     
     list_i = dof%m_psi*dof%n_psi+1
     list_f = dof%m_psi*dof%n_psi+2*dof%m_K*dof%n_K
     
+    call allocate(dof_solver, mesh)
+    call intpl_dof_solver(dof_solver, dof, mesh)
+    
     inrange = .TRUE.
+    
+    ! u and v
+    allocate(u(mesh%m, mesh%n-1))
+    allocate(v(mesh%m-1, mesh%n))
+    
+    ! u = diff(psi)*sc/(1*sc)
+    u = -(dof_solver%psi%data(:,2:mesh%n) - dof_solver%psi%data(:,1:mesh%n-1))
+    v = (dof_solver%psi%data(2:mesh%m,:) - dof_solver%psi%data(1:mesh%m-1,:))
+    
+    ! L1: u = 1.5*sc/sc; v = 2.5
+    do j0 = 1, size(u, 2)
+      do i0 = 1, size(u, 1)
+        if (dabs(u(i0, j0)) .ge. 1.5_dp) then
+          inrange = .FALSE.
+        end if
+      end do
+    end do
+    
+    do j0 = 1, size(v, 2)
+      do i0 = 1, size(v, 1)
+        if (dabs(v(i0, j0)) .ge. 2.5_dp) then
+          inrange = .FALSE.
+        end if
+      end do
+    end do
+    
+    deallocate(u)
+    deallocate(v)
+    
+    ! Sigma 1 and Sigma 2
     do cid = list_i, list_f
-      if ((dof%canon(cid) .le. 100.0_dp*sc) .or. (dof%canon(cid) .gt. 1E8*sc)) then  
+      if ((dof%canon(cid) .le. 100.0_dp*sc) .or. (dof%canon(cid) .gt. 1E8*sc)) then
         inrange = .FALSE.
       end if
     end do
     
     if (inrange) then
-      evaluate_logprior = 0.0_dp
+      logPrior = 0.0_dp
     else
-      evaluate_logprior = -1E15
+      logPrior = -1E15
     end if
+    
+    call deallocate(dof_solver)
 
-  end function evaluate_logprior
+  end subroutine evaluate_logPrior
   
   subroutine propose_dof_canon2(dof, canon_SSD, canon_id)
     type(dofdat), intent(inout) :: dof
