@@ -10,17 +10,15 @@ module advdiff_field
     & scale, set, addto, addto_product, &
     & dx_field, dy_field, manual_field, &
     & psi_to_uv, int_field, int_sq_field, &
-    & eval_field, iszero, &
-    & assemble_psi, assemble_K, &
-    & psi_fn, K_fn, &
-    & assemble_Ke
-
+    & eval_field, iszero
+    
   public :: indicator_field
   public :: uv_signed, K_flux, T_operator
   public :: print_info, diff_int
   public :: testcase_fields, fld_x, assign_q_periodic
   public :: q_stat, S_rhs_nonstat, S_rhs_stat
   public :: fourier_intpl, cosine_intpl, sine_intpl, bilinear_intpl
+  public :: neg_int
   
   ! Note: field and field_ptr are different
   type field
@@ -727,35 +725,42 @@ contains
     ! test_id = 2: steady state    
     if ((test_id .eq. 1) .or. (test_id .eq. 2)) then     
       ! psi
-      gl = psi%glayer
+      if (psi%glayer .ne. 0) &
+        call abort_handle("There should not be ghost layer in psi!", __FILE__, __LINE__)
       
       if (psi%type_id .ne. 1) &
         call abort_handle("psi not defined at corners", __FILE__, __LINE__)
       
-      do j = 1, psi%n + 1
-        do i = 1, psi%m + 1
+      do j = 1, size(psi%data, 2)
+        do i = 1, size(psi%data, 1)
           ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
           x = fld_x(i, m, psi%type_id)  ! in [0, 1]
           y = fld_x(j, n, psi%type_id)  ! in [0, 1]
-          psi%data(i+gl, j+gl) = m*n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
+          psi%data(i, j) = m*n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
           
-          ! Ad-hoc
-          !psi%data(i+gl, j+gl) = 0.01_dp*psi%data(i+gl, j+gl)
-
+          if (dabs(psi%data(i, j)) .le. 1D-15) psi%data(i, j) = 0.0_dp
         end do
       end do
 
       ! K11, K22, K12
-      gl = K11%glayer
+      if (K11%glayer .ne. 0) &
+        call abort_handle("There should not be ghost layer in K11!", __FILE__, __LINE__)
       
-      do j = 1, K11%n
-        do i = 1, K11%m
+      if (K11%type_id .ne. 1) &
+        call abort_handle("K11 not defined at corners", __FILE__, __LINE__)
+      
+      do j = 1, size(K11%data, 2)
+        do i = 1, size(K11%data, 1)
           ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
           x = fld_x(i, m, K11%type_id)
           y = fld_x(j, n, K11%type_id)
-          K11%data(i+gl, j+gl) = m*m/((16.0*Pi)**2)* 4.0_dp*dsin(Pi*x)*dsin(Pi*y)
-          K22%data(i+gl, j+gl) = n*n/((16.0*Pi)**2)* 2.0_dp*dsin(Pi*x)*dsin(Pi*y)
-          K12%data(i+gl, j+gl) = m*n/((16.0*Pi)**2)* dsin(Pi*x)*dsin(Pi*y)
+          K11%data(i, j) = m*m/((16.0*Pi)**2)* 4.0_dp*dsin(Pi*x)*dsin(Pi*y)
+          K22%data(i, j) = n*n/((16.0*Pi)**2)* 2.0_dp*dsin(Pi*x)*dsin(Pi*y)
+          K12%data(i, j) = m*n/((16.0*Pi)**2)* dsin(Pi*x)*dsin(Pi*y)
+          
+          if (dabs(K11%data(i, j)) .le. 1D-15) K11%data(i, j) = 0.0_dp
+          if (dabs(K22%data(i, j)) .le. 1D-15) K22%data(i, j) = 0.0_dp
+          if (dabs(K12%data(i, j)) .le. 1D-15) K12%data(i, j) = 0.0_dp
         end do
       end do
     end if
@@ -895,132 +900,6 @@ contains
     end if
   end function fld_x
   
-  pure real(kind=dp) function psi_fn(xl, yl, param)
-    real(kind=dp), intent(in) :: xl, yl  ! in [0, 1]
-    integer, intent(in) :: param
-
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    psi_fn = 0.0_dp
-
-    ! Taylor green
-    if (param .eq. 1) psi_fn = dsin(Pi*xl) * dsin(Pi*2.0_dp*yl)
-    ! Tilted Taylor green
-    if (param .eq. 2) psi_fn = (xl + 2.0_dp*yl)*dsin(Pi*xl)*dsin(Pi*2.0_dp*yl)
-  end function psi_fn
-
-  subroutine assemble_psi(fld, param)
-    type(field), intent(out) :: fld
-    integer, intent(in) :: param
-    integer :: i, j, m, n
-
-    real(kind = dp), dimension(:, :), pointer :: lfld
-    real(kind = dp) :: xl, yl
-
-    lfld => fld%data
-
-    ! Assumed m = n
-    m = size(fld%data,1)-1  ! =number of cells
-    n = size(fld%data,2)-1  ! =number of cells
-
-    ! Functions defined on logical space [0, 1]
-    ! xl: [0, 1] -> x: [1, nc+1], at edges
-    do j = 1, size(fld%data,2)
-      do i = 1, size(fld%data,1)
-        xl = real(i-1)/m
-        yl = real(j-1)/n
-        fld%data(i, j) = psi_fn(xl, yl, param) * m  ! Rescale to computational domain [1, m+1]
-
-        ! Assign 0.0
-        if (dabs(fld%data(i, j)) < 1.0e-12) fld%data(i, j) = 0.0_dp
-      end do
-    end do
-  end subroutine assemble_psi
-
-  pure real(kind=dp) function K_fn(xl, yl, param)
-    real(kind=dp), intent(in) :: xl, yl  ! in [0, 1]
-    integer, intent(in) :: param
-
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    if (param .eq. 0) K_fn = 0.0_dp
-    if (param .eq. 1) K_fn = 1.0_dp
-    if (param .eq. 2) K_fn = (dsin(2.0_dp*Pi*xl) * dsin(2.0_dp*Pi*yl))**2
-    if (param .eq. 3) K_fn = (dsin(2.0_dp*Pi*xl) * dsin(2.0_dp*Pi*yl))**2 + dsin(Pi*xl) * dcos(Pi*yl)
-    if (param .eq. 11) K_fn = 1.0_dp*xl + 2.0_dp*yl
-    if (param .eq. 22) K_fn = 3.0_dp*xl - 4.0_dp*yl
-    if (param .eq. 12) K_fn = 2.0_dp*xl + 5.0_dp*yl
-  end function K_fn
-
-  subroutine assemble_K(fld, param)
-    type(field), intent(out) :: fld
-    integer, intent(in) :: param
-    integer :: i, j, m, n
-
-    real(kind = dp), dimension(:, :), pointer :: lfld
-    real(kind = dp) :: xl, yl
-
-    lfld => fld%data
-
-    m = fld%m ! =number of cells
-    n = fld%n ! =number of cells
-
-    ! Functions defined on logical space [0, 1]
-    ! xl: [0, 1] -> x: [1, nc+1], at centre
-    do j = 1, size(fld%data,2)
-      do i = 1, size(fld%data,1)
-        xl = (real(i) -0.5_dp)/m
-        yl = (real(j) -0.5_dp)/n
-
-        fld%data(i, j) = K_fn(xl, yl, param)
-
-        ! Rescale to computational domain [1, m+1], assumed m = n
-        !fld%data(i, j) = fld%data(i, j) * (m-1)
-      end do
-    end do
-  end subroutine assemble_K
-
-  subroutine assemble_Ke(lfld, param)
-    real(kind=dp), dimension(:,:), intent(inout):: lfld
-    integer, intent(in) :: param
-    integer :: i, j, m, n
-
-    real(kind = dp) :: xl, yl
-
-
-    m = size(lfld,1)
-    n = size(lfld,2)
-    
-    ! Functions defined on logical space [0, 1]
-    ! xl: [0, 1] -> x: [1, nc+1], at edges
-    if (m .eq. (n+1)) then
-      do j = 1, n
-        do i = 1, m
-          xl = (real(i) -1.0_dp)/(m-1)
-          yl = (real(j) -0.5_dp)/n
-
-          lfld(i, j) = K_fn(xl, yl, param)
-
-          ! Rescale to computational domain [1, m+1], assumed m = n
-          !lfld(i, j) = lfld(i, j) * (m-1)
-        end do
-      end do
-    elseif ((m+1) .eq. n) then
-      do j = 1, n
-        do i = 1, m
-          xl = (real(i) -0.5_dp)/m
-          yl = (real(j) -1.0_dp)/(n-1)
-
-          lfld(i, j) = K_fn(xl, yl, param)
-
-          ! Rescale to computational domain [1, m+1], assumed m = n
-          !fld%data(i, j) = fld%data(i, j) * (m-1)
-        end do
-      end do
-    end if
-    
-  end subroutine assemble_Ke
-  
   pure real(kind=dp) function int_field(fld)
     type(field), intent(in) :: fld
     integer :: i, j, gl
@@ -1144,7 +1023,7 @@ contains
     write(6, "(a,i0,a,i0,a,i0)") "|  m, n, dof: ", fld%m, ", ", fld%n, ", ", fld%m*fld%n
     write(6, "(a,i0)") "|  ghost layer: ", fld%glayer
     write(6, "(a,i0,a,i0)") "|  Negative dof = ", count_neg(fld), " out of ", fld%m*fld%n
-    write(6, "(a,"//dp_chr//",a,"//dp_chr//")") "|  Max -ve dof = ", max_neg(fld), "; -ve_int ", neg_int(fld)
+    write(6, "(a,"//dp_chr//",a,"//dp_chr//")") "|  Least -ve dof = ", max_neg(fld), "; -ve_int ", neg_int(fld)
     write(6, "(a,"//dp_chr//",a,"//dp_chr//")") "|  Max = ", maxval(fld%data), "; Min = ", minval(fld%data)
     write(6, "(a,"//dp_chr//")") "|  fld_int = ", int_field(fld)
     !write(6, "(a)") "---------------------------------- "

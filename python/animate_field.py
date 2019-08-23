@@ -18,7 +18,8 @@ fig, axarr = plt.subplots(1, 2, figsize=(12,6))
 def animate_full(ts):
   # Upper left panel: PDE solution
   ts_in = str(ts)
-  field_in = 'qr146'
+  field_in = 'q146'
+  field_in = 'rev_q146'
   field_data = data_folder + field_in + '_' + ts_in
 
 

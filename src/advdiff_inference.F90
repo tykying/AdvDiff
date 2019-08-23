@@ -14,12 +14,12 @@ module advdiff_inference
   public :: dofdat, IndFndat
   public :: allocate, deallocate, set, reset_inference_timers, print_inference_timers
   public :: validate_IndFn
-  public :: propose_dof
   public :: eval_INDk_loglik
   public :: reverse_dof_to_dof_inv
   public :: compute_dJdm_Cid
   public :: convert_dof_to_theta, convert_theta_to_dof
   public :: convert_dof_to_canon, convert_canon_to_dof
+  public :: propose_dof_canon
 
   type dofdat
     integer :: m_psi, n_psi
@@ -134,9 +134,9 @@ contains
     
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-!     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
-    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+!    real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
+    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Irrelevant
     
     if (present(sc)) then
       ssc = sc
@@ -403,7 +403,12 @@ contains
     type(meshdat), intent(in) :: mesh
     
     integer :: m, n, Mx, My
-    real(kind=dp), dimension(:, :), allocatable :: fldij
+    real(kind=dp), dimension(:, :), allocatable :: fldij ! Bilinear intepolation
+    
+    ! Unstructured grid
+    integer, dimension(:), allocatable :: fldind
+    integer :: i, j, k
+    ! END Unstructured grid
     
     ! fldij(i, j) = field(x_i, y_j)
     ! DOF: can be coarse field(x_i, y_j) or Fourier coefficients
@@ -428,22 +433,70 @@ contains
 ! 
 !     deallocate(fldij)
 
-!     ! Bilinear intepolation
-    allocate(fldij(m+2, n+2))
-    fldij = 0.0_dp  ! Boundary condition for stream function
-    fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-   
-    Mx = mesh%m/(m+1)
-    My = mesh%n/(n+1)
-    ! Assumed periodic(= 0) at first and final row/column
-    call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
-    deallocate(fldij)
+! !     ! Bilinear intepolation
+!     allocate(fldij(m+2, n+2))
+!     fldij = 0.0_dp  ! Boundary condition for stream function
+!     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+!    
+!     Mx = mesh%m/(m+1)
+!     My = mesh%n/(n+1)
+!     ! Assumed periodic(= 0) at first and final row/column
+!     call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
+!     deallocate(fldij)
 
-    ! Sine intepolation
+!     ! Sine intepolation
 !     Mx = mesh%m/(m+1)
 !     My = mesh%n/(n+1)
 !     dof_solver%psi%data = 0.0_dp
 !     call sine_intpl(dof_solver%psi%data(2:mesh%m, 2:mesh%n), dof%psi%data, Mx, My)
+
+    ! Unstructured bilinear intepolation: dof_solver%psi%data
+    if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
+      allocate(fldij(m+2, n+2))
+      fldij = 0.0_dp  ! Boundary condition for streamfunction
+      fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+
+      dof_solver%psi%data = 0.0_dp
+      allocate(fldind(17))
+      fldind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
+      fldind = fldind + 1
+      
+      ! Interpolate along x
+      do j = 1, size(fldij, 2)
+        do i = 1, (size(fldind, 1)-1)
+          do k = fldind(i), (fldind(i+1)-1)
+            dof_solver%psi%data(k, 4*(j-1)+1) = &
+              ( fldij(i, j)  *(fldind(i+1)-k) + &
+                fldij(i+1, j)*(k  -fldind(i)) ) / &
+              (fldind(i+1)-fldind(i))
+          end do
+        end do
+        
+        ! Final point: size(fldind, 1)
+        dof_solver%psi%data(65, 4*(j-1)+1) = 0.0_dp
+      end do
+      
+      ! Interpolate along y
+      fldind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
+      fldind = fldind + 1
+      do i = 1, size(dof_solver%psi%data, 2)
+        do j = 1, (size(fldind, 1)-1)
+          do k = fldind(j), (fldind(j+1)-1)
+            dof_solver%psi%data(i, k) = &
+              ( dof_solver%psi%data(i, fldind(j))  *(fldind(j+1)-k) + &
+                dof_solver%psi%data(i, fldind(j+1))*(k  -fldind(j)) ) / &
+              (fldind(j+1)-fldind(j))
+          end do
+        end do
+        
+        ! Final point: size(fldind, 2)
+        dof_solver%psi%data(i, 65) = 0.0_dp
+      end do
+      
+      deallocate(fldij)
+      deallocate(fldind)
+    end if
+    ! END Unstructured grid
 
     ! Diffusivity
     ! N.B. DOF%psi = Cartesian grid at cell centre
@@ -479,8 +532,8 @@ contains
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-!    real(kind=dp), parameter :: psi_scale = 0.1_dp*L
-    real(kind=dp), parameter :: psi_scale = 0.01_dp*L  ! Layer 2
+    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Layer 1
+!    real(kind=dp), parameter :: psi_scale = 10.0_dp*1000.0_dp  ! Layer 2
     
     integer :: k, list_i, list_f
     
@@ -494,7 +547,7 @@ contains
     list_i = 1
     list_f = dof%m_psi*dof%n_psi
     do k = list_i, list_f
-      canon_SSD(k) = 0.05_dp*psi_scale*ssc
+      canon_SSD(k) = 0.1_dp*psi_scale*ssc
     end do
     
     ! sigma1_sq, sigma2_sq 
@@ -726,29 +779,30 @@ contains
     u = -(dof_solver%psi%data(:,2:mesh%n) - dof_solver%psi%data(:,1:mesh%n-1))
     v = (dof_solver%psi%data(2:mesh%m,:) - dof_solver%psi%data(1:mesh%m-1,:))
     
-    ! L1: u = 1.5*sc/sc; v = 2.5
+    ! L1: u = 1.5*sc/sc; v = 2.5 works
     do j0 = 1, size(u, 2)
       do i0 = 1, size(u, 1)
-        if (dabs(u(i0, j0)) .ge. 1.5_dp) then
-          inrange = .FALSE.
+        if (dabs(u(i0, j0)) .ge. 10.0_dp) then
+          !inrange = .FALSE.
         end if
       end do
     end do
     
     do j0 = 1, size(v, 2)
       do i0 = 1, size(v, 1)
-        if (dabs(v(i0, j0)) .ge. 2.5_dp) then
-          inrange = .FALSE.
+        if (dabs(v(i0, j0)) .ge. 10.0_dp) then
+          !inrange = .FALSE.
         end if
       end do
     end do
     
     deallocate(u)
     deallocate(v)
+    call deallocate(dof_solver)
     
     ! Sigma 1 and Sigma 2
     do cid = list_i, list_f
-      if ((dof%canon(cid) .le. 100.0_dp*sc) .or. (dof%canon(cid) .gt. 1E8*sc)) then
+      if ((dof%canon(cid) .le. 10.0_dp*sc) .or. (dof%canon(cid) .gt. 1E8*sc)) then
         inrange = .FALSE.
       end if
     end do
@@ -759,11 +813,10 @@ contains
       logPrior = -1E15
     end if
     
-    call deallocate(dof_solver)
 
   end subroutine evaluate_logPrior
   
-  subroutine propose_dof_canon2(dof, canon_SSD, canon_id)
+  subroutine propose_dof_canon(dof, canon_SSD, canon_id)
     type(dofdat), intent(inout) :: dof
     real(kind = dp), dimension(:), intent(in) :: canon_SSD
     integer, intent(in) :: canon_id
@@ -774,96 +827,7 @@ contains
     
     call convert_canon_to_dof(dof, dof%canon, canon_id)
     
-  end subroutine propose_dof_canon2
-  
-  subroutine propose_dof_canon(dof, canon, canon_id, dof_SSD)
-    type(dofdat), intent(inout) :: dof
-    real(kind = dp), dimension(:), intent(inout) :: canon
-    integer, intent(in) :: canon_id
-    type(dofdat), intent(in) :: dof_SSD
-    
-    integer :: psi_id, K_id, cmp
-    integer :: i0, j0
-    real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
-    
-    if (canon_id .le. dof%m_psi*dof%n_psi) then
-      ! psi
-      psi_id = canon_id
-      
-      i0 = k2i(psi_id, dof%m_psi)
-      j0 = k2j(psi_id, dof%m_psi)
-    
-      dof%psi%data(i0,j0) = dof%psi%data(i0,j0) + dof_SSD%psi%data(i0,j0)*randn()
-      canon(canon_id) = dof%psi%data(i0,j0)
-    else
-      ! K
-      K_id = canon_id - dof%m_psi*dof%n_psi
-      
-      if (K_id .le. dof%m_K*dof%n_K) then
-        cmp = 0       ! Kxx
-      elseif (K_id .le. 2*dof%m_K*dof%n_K) then
-        K_id = K_id - dof%m_K*dof%n_K
-        cmp = 1       ! Kyy
-      elseif (K_id .le. 3*dof%m_K*dof%n_K) then
-        K_id = K_id - 2*dof%m_K*dof%n_K
-        cmp = 2       ! Kxy
-      else
-        call abort_handle("Wrong K_id!", __FILE__, __LINE__)
-      end if
-      
-      i0 = k2i(K_id, dof%m_K)
-      j0 = k2j(K_id, dof%m_K)
-      
-      ! K: defined at corners
-      Kxx = dof%K11%data(i0,j0)
-      Kyy = dof%K22%data(i0,j0)
-      Kxy = dof%K12%data(i0,j0)
-      
-      call KCarte_to_KCanon(sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy)
-      
-      ! Perturbation
-      if (cmp .eq. 0) then
-        sigma1_sq = dabs(sigma1_sq + dof_SSD%K11%data(i0,j0)*randn() )
-        canon(canon_id) = sigma1_sq
-      elseif (cmp .eq. 1) then
-        sigma2_sq = dabs(sigma2_sq + dof_SSD%K22%data(i0,j0)*randn() )
-        canon(canon_id) = sigma2_sq
-      elseif (cmp .eq. 2) then
-        phi_K = phi_K + dof_SSD%K12%data(i0,j0)*randn()
-        canon(canon_id) = phi_K
-      end if
-      
-      call KCanon_to_KCarte(Kxx, Kyy, Kxy, sigma1_sq, sigma2_sq, phi_K)
-      
-      dof%K11%data(i0,j0) = Kxx
-      dof%K22%data(i0,j0) = Kyy
-      dof%K12%data(i0,j0) = Kxy
-    end if
-    
   end subroutine propose_dof_canon
-  
-  subroutine propose_dof(dof, dof_id, dof_SSD)
-    type(dofdat), intent(inout) :: dof
-    integer, intent(in) :: dof_id
-    type(dofdat), intent(in) :: dof_SSD
-    
-    integer :: K_id, psi_id
-    
-    if (dof_id .le. dof%m_psi*dof%n_psi) then
-      psi_id = dof_id
-      call propose_dof_psi(dof, psi_id, dof_SSD)
-      
-!       psi_id = dof%m_psi*dof%n_psi -dof_id +1
-!       call propose_dof_psi(dof, psi_id, dof_SSD)
-    else
-      K_id = dof_id - dof%m_psi*dof%n_psi
-      call propose_dof_Kcmp(dof, K_id, dof_SSD)
-      
-!       K_id = dof%m_K*dof%n_K -(dof_id - dof%m_psi*dof%n_psi) +1
-!       call propose_dof_K(dof, K_id, dof_SSD)
-    end if
-    
-  end subroutine propose_dof
   
   subroutine reverse_dof_to_dof_inv (dof_inv, dof)
     type(dofdat), intent(inout) :: dof_inv
