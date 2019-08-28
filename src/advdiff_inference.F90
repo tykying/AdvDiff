@@ -19,7 +19,7 @@ module advdiff_inference
   public :: compute_dJdm_Cid
   public :: convert_dof_to_theta, convert_theta_to_dof
   public :: convert_dof_to_canon, convert_canon_to_dof
-  public :: propose_dof_canon
+  public :: propose_dof_canon, propose_dof_EM
 
   type dofdat
     integer :: m_psi, n_psi
@@ -165,9 +165,9 @@ contains
 
     dof%SlogPost = dof_in%SlogPost
     dof%occurrence = dof_in%occurrence
-    
+    dof%ndof = dof_in%ndof
+
     dof%canon = dof_in%canon
-    
   end subroutine set_dof
   
   subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
@@ -185,6 +185,8 @@ contains
     
     call allocate(dof_solver, mesh)
     call intpl_dof_solver(dof_solver, dof, mesh)
+    
+!     call print_info(dof_solver%psi, h/nts)
 
     !! Control number of thread = 32 by 
     !! "!$OMP PARALLEL DO num_threads(32)"
@@ -406,7 +408,7 @@ contains
     real(kind=dp), dimension(:, :), allocatable :: fldij ! Bilinear intepolation
     
     ! Unstructured grid
-    integer, dimension(:), allocatable :: fldind
+    integer, dimension(:), allocatable :: xind, yind
     integer :: i, j, k
     ! END Unstructured grid
     
@@ -450,53 +452,62 @@ contains
 !     dof_solver%psi%data = 0.0_dp
 !     call sine_intpl(dof_solver%psi%data(2:mesh%m, 2:mesh%n), dof%psi%data, Mx, My)
 
-    ! Unstructured bilinear intepolation: dof_solver%psi%data
-    if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
-      allocate(fldij(m+2, n+2))
-      fldij = 0.0_dp  ! Boundary condition for streamfunction
-      fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-
-      dof_solver%psi%data = 0.0_dp
-      allocate(fldind(17))
-      fldind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
-      fldind = fldind + 1
-      
-      ! Interpolate along x
-      do j = 1, size(fldij, 2)
-        do i = 1, (size(fldind, 1)-1)
-          do k = fldind(i), (fldind(i+1)-1)
-            dof_solver%psi%data(k, 4*(j-1)+1) = &
-              ( fldij(i, j)  *(fldind(i+1)-k) + &
-                fldij(i+1, j)*(k  -fldind(i)) ) / &
-              (fldind(i+1)-fldind(i))
-          end do
-        end do
-        
-        ! Final point: size(fldind, 1)
-        dof_solver%psi%data(65, 4*(j-1)+1) = 0.0_dp
-      end do
-      
-      ! Interpolate along y
-      fldind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
-      fldind = fldind + 1
-      do i = 1, size(dof_solver%psi%data, 2)
-        do j = 1, (size(fldind, 1)-1)
-          do k = fldind(j), (fldind(j+1)-1)
-            dof_solver%psi%data(i, k) = &
-              ( dof_solver%psi%data(i, fldind(j))  *(fldind(j+1)-k) + &
-                dof_solver%psi%data(i, fldind(j+1))*(k  -fldind(j)) ) / &
-              (fldind(j+1)-fldind(j))
-          end do
-        end do
-        
-        ! Final point: size(fldind, 2)
-        dof_solver%psi%data(i, 65) = 0.0_dp
-      end do
-      
-      deallocate(fldij)
-      deallocate(fldind)
-    end if
-    ! END Unstructured grid
+!     ! Unstructured bilinear intepolation: dof_solver%psi%data
+!     if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
+!       allocate(fldij(m+2, n+2))
+!       fldij = 0.0_dp  ! Boundary condition for streamfunction
+!       fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+! 
+!       dof_solver%psi%data = 0.0_dp
+!       allocate(xind(17))
+!       xind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
+!       xind = xind + 1
+!       allocate(yind(17))
+! !       yind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
+!       yind = (/0, 4, 10, 18, 24, 29, 33, 35, 37, 38, 39, 41, 43, 47, 52, 60, 64 /)
+!       yind = yind + 1
+!       
+!       ! Interpolate along x
+!       do j = 1, size(yind, 1)
+!         do i = 1, (size(xind, 1)-1)
+!           do k = xind(i), (xind(i+1)-1)
+!             dof_solver%psi%data(k, yind(j)) = &
+!               ( fldij(i, j)  *(xind(i+1)-k) + &
+!                 fldij(i+1, j)*(k  -xind(i)) ) / &
+!               (xind(i+1)-xind(i))
+!           end do
+!         end do
+!         
+!         ! Final point: size(xind, 1)
+!         dof_solver%psi%data(xind(size(xind,1)), yind(j)) = 0.0_dp
+!       end do
+!       
+!       ! Interpolate along y
+!       do i = 1, size(dof_solver%psi%data, 2)
+!         do j = 1, (size(yind, 1)-1)
+!           do k = yind(j), (yind(j+1)-1)
+!             dof_solver%psi%data(i, k) = &
+!               ( dof_solver%psi%data(i, yind(j))  *(yind(j+1)-k) + &
+!                 dof_solver%psi%data(i, yind(j+1))*(k  -yind(j)) ) / &
+!               (yind(j+1)-yind(j))
+!           end do
+!         end do
+!         
+!         ! Final point: size(yind, 2)
+!         dof_solver%psi%data(i, yind(size(yind,1))) = 0.0_dp
+!       end do
+!       
+!       deallocate(fldij)
+!       deallocate(xind)
+!       deallocate(yind)
+!     end if
+!     ! END Unstructured grid
+    
+    !! Use Eulerian time-average
+    dof_solver%psi%data = 0.0_dp
+    dof_solver%psi%data(2:size(dof_solver%psi%data,1)-1, &
+                        2:size(dof_solver%psi%data,2)-1) = dof%psi%data
+    !! End: Use Eulerian time-average
 
     ! Diffusivity
     ! N.B. DOF%psi = Cartesian grid at cell centre
@@ -828,6 +839,23 @@ contains
     call convert_canon_to_dof(dof, dof%canon, canon_id)
     
   end subroutine propose_dof_canon
+  
+  subroutine propose_dof_EM(dof, canon_SSD, canon_id)
+    type(dofdat), intent(inout) :: dof
+    real(kind = dp), dimension(:), intent(in) :: canon_SSD
+    integer, intent(in) :: canon_id
+    
+    real(kind=dp), dimension(:), allocatable :: canon
+    integer :: canon_K
+    
+    ! No need to propose psi
+    canon_K = canon_id + dof%m_psi*dof%n_psi
+    
+    dof%canon(canon_K) = dof%canon(canon_K) + canon_SSD(canon_K)*randn()
+    
+    call convert_canon_to_dof(dof, dof%canon, canon_K)
+    
+  end subroutine propose_dof_EM
   
   subroutine reverse_dof_to_dof_inv (dof_inv, dof)
     type(dofdat), intent(inout) :: dof_inv

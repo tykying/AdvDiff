@@ -20,10 +20,11 @@ date
 #nohup ./advdiff > mon_advdiff_bilinear_h32d_canon_lmt.txt &
 #nohup ./advdiff > mon_advdiff64_TTG_bilinear_2.txt &
 #nohup ./advdiff > mon_advdiff_h64d_bilinear.txt &
-nohup ./advdiff > mon_advdiff_h32d_unstructured.txt &
+#nohup ./advdiff > mon_advdiff_h32d_unstructured2.txt &
+#nohup ./advdiff > mon_advdiff_h32d_EM.txt &
 #nohup ./advdiff > LW_convtest2.txt &
 #nohup ./advdiff > MC_convtest2.txt &
-#./advdiff
+./advdiff
 
 date 
 

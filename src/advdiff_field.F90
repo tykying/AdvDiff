@@ -19,6 +19,7 @@ module advdiff_field
   public :: q_stat, S_rhs_nonstat, S_rhs_stat
   public :: fourier_intpl, cosine_intpl, sine_intpl, bilinear_intpl
   public :: neg_int
+  public :: sine_filter
   
   ! Note: field and field_ptr are different
   type field
@@ -344,6 +345,53 @@ contains
     call fftw_cleanup()
 
   end subroutine sine_intpl
+  
+  subroutine sine_filter(out, in)
+    ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+  
+    type(C_PTR) :: plan
+    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
+    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    
+    integer :: i, j
+    
+    allocate(Bpq(size(in,1), size(in,2)))
+    allocate(in_copy(size(in,1), size(in,2)))
+    allocate(Bpq_pad(size(out,1), size(out,2)))
+
+    in_copy = in
+    
+    ! Forward DCT
+    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
+                            FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, in_copy, Bpq)
+    call fftw_destroy_plan(plan)
+    
+!     call print_array(Bpq, "Bpq")
+    
+    ! Zero padding: only need to pad zeros beyond Bpq
+    !! Relationship with matlab dct2
+    !! http://www.voidcn.com/article/p-pduypgxe-du.html
+    Bpq_pad = Bpq(1:size(Bpq_pad,1), 1:size(Bpq_pad,2))
+    
+    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
+                          out, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, Bpq_pad, out)
+    call fftw_destroy_plan(plan)
+
+    out = out/(4*(size(in,1)+1)*(size(in,2)+1))
+    
+    deallocate(Bpq)
+    deallocate(Bpq_pad)
+    deallocate(in_copy)
+    call fftw_cleanup()
+
+  end subroutine sine_filter
   
   subroutine bilinear_intpl(out, in, Mx, My)
     real(kind=dp), dimension(:, :), intent(out) :: out

@@ -12,7 +12,7 @@ module advdiff_io
 
   private
 
-  public :: read_header, read, write, read_theta
+  public :: read_header, read, write, read_theta, read_QGfield
 
   interface read_header
     module procedure read_field_header, read_traj_header
@@ -471,6 +471,70 @@ contains
     deallocate(theta)
     
   end subroutine read_theta
+  
+  subroutine read_QGfield_header(fld, t, nlayer, filename)
+    type(field), intent(out) :: fld
+    real(kind = dp), intent(out) :: t
+    character(len = *), intent(in) :: filename
+    integer, intent(out) :: nlayer
+
+    character(len = 1) :: chr
+    character(len = field_name_len) :: name
+    character(len = max_line_len) :: format_chr, input_chr
+    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    integer :: i, m, n, type_id
+
+    lfilename = trim(filename)
+
+    open(unit = input_unit, file = trim(lfilename) // ".hdr", &
+      & status = "old", action = "read")
+    read(input_unit, "(a)") input_chr
+    if(trim(input_chr) /= "serial") then
+      call abort_handle("Invalid header", __FILE__, __LINE__)
+    end if
+    read(input_unit, "(a)") name
+    read(input_unit, "(a)") input_chr
+    i = scan(input_chr, " ")
+    write(format_chr, "(a,i0,a)") "(i", i - 1, ",a1,"//int_chr//")"
+    read(input_chr, trim(format_chr)) m, chr, n
+    read(input_unit, "("//int_chr//")") nlayer
+    if (nlayer .ne. 3) then
+      call abort_handle("Invalid header: nlayer =/= 3", __FILE__, __LINE__)
+    end if
+    read(input_unit, "("//dp_chr//")") t
+    close(input_unit)
+
+    call allocate(fld, m-1, n-1, name, glayer=0, type_id=1)
+
+  end subroutine read_QGfield_header
+
+  subroutine read_QGfield(fld, t, filename, layer)
+    type(field), intent(inout) :: fld
+    real(kind=dp), intent(out) :: t
+    character(len = *), intent(in) :: filename
+    integer, intent(in) :: layer
+    
+    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
+    
+    real(kind=dp), dimension(:,:,:), allocatable :: tmp_fld
+    integer :: nlayer
+
+    lfilename = trim(filename)
+    
+    call read_QGfield_header(fld, t, nlayer, filename)
+    
+    allocate(tmp_fld(size(fld%data, 1), size(fld%data, 2), nlayer))
+    
+    open(unit = input_unit, file = trim(lfilename) // ".dat", &
+      & status = "old", access = "stream", action = "read")
+    read(input_unit) tmp_fld
+    close(input_unit)
+    
+    fld%data = tmp_fld(:, :, layer)
+    
+    deallocate(tmp_fld)
+
+  end subroutine read_QGfield
  
 
   subroutine reset_io_timers()

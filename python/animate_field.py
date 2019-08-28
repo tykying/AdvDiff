@@ -2,6 +2,8 @@ import sys
 
 data_folder = './unittest/q64/TTG_sinusoidal/'
 data_folder = './unittest/q64/QGM2_L1/'
+data_folder = './unittest/cellular/'
+data_folder = './unittest/meanflow/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import numpy
@@ -20,14 +22,17 @@ def animate_full(ts):
   ts_in = str(ts)
   field_in = 'q146'
   field_in = 'rev_q146'
+  field_in = 'q'
+  field_in = 'psi_test'
+  field_in = 'psi_filtered'
   field_data = data_folder + field_in + '_' + ts_in
 
 
   name, tt, arr, glayer, type_id = field_io.read_field(field_data)
   nx, ny, = arr.shape
 
-  q_max = 0.0625
-  levels   = numpy.linspace(0, q_max, 200, endpoint = True)
+  q_max = numpy.amax(numpy.abs(arr))
+  levels   = numpy.linspace(-q_max, q_max, 200, endpoint = True)
   cmap = plt.get_cmap('bwr')
   norm = BoundaryNorm(levels, ncolors=cmap.N, clip=True)
 
@@ -36,10 +41,11 @@ def animate_full(ts):
 
   X, Y = numpy.meshgrid(x_logical, y_logical)
 
-  tt = tt/(3600*24)
+  tt_day = tt/(3600*24)
   axarr[0].pcolormesh(X, Y, numpy.transpose(arr), cmap='Reds')
+  #axarr[0].contourf(numpy.transpose(arr))
   axarr[0].set_xlabel('Integral = '+str(numpy.sum(arr[:])))
-  axarr[0].set_title('t = ' + str(tt))
+  axarr[0].set_title('t = ' + str(tt_day) + 'days')
   axarr[0].set_xlim(x_logical[0], x_logical[-1])
   axarr[0].set_ylim(y_logical[0], y_logical[-1])
   axarr[0].set_aspect('equal')
@@ -54,7 +60,8 @@ def animate_full(ts):
   axarr[1].set_ylim(y_logical[0], y_logical[-1])
   axarr[1].set_aspect('equal')
 
-ani = FuncAnimation(fig, animate_full, frames=range(0, 256+1, 8)) #, blit=True)
+#ani = FuncAnimation(fig, animate_full, frames=range(0, 256+1, 8)) #, blit=True)
+ani = FuncAnimation(fig, animate_full, frames=range(0, 2400+1, 800)) #, blit=True)
 #animate_full(0)
 plt.show()
 

@@ -27,8 +27,9 @@ contains
     !call unittest_IO()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    call unittest_inference_OMP()
+    !call unittest_inference_OMP()
     !call unittest_optimisation_OMP()
+    call unittest_TG_instability()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -670,6 +671,44 @@ contains
     deallocate(data_exact)
     deallocate(data_intpl)
     
+    ! Test : Sinusoidal filter
+    scx = 128+1
+    scy = 128+1
+    allocate(data_in(scx, scy))
+    do j = 1, size(data_in, 2)
+      do i = 1, size(data_in, 1)
+        x = real(i-1, kind=dp)/real(scx-1, kind=dp)
+        y = real(j-1, kind=dp)/real(scy-1, kind=dp)
+        
+        data_in(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(16.0_dp*Pi*x)*dsin(16.0_dp*Pi*y)
+      end do
+    end do
+    
+    allocate(data_exact(16+1, 16+1))
+    
+    do j = 1, size(data_exact, 2)
+      do i = 1, size(data_exact, 1)
+        x = real(i-1, kind=dp)/real(size(data_exact,1)-1, kind=dp)
+        y = real(j-1, kind=dp)/real(size(data_exact,2)-1, kind=dp)
+        
+       data_exact(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y)
+      end do
+    end do
+    
+    allocate(data_intpl(16+1, 16+1))
+    data_intpl = 0.0_dp
+    call sine_filter(data_intpl(2:size(data_intpl,1)-1,2:size(data_intpl,2)-1), &
+                     data_in(2:size(data_in,1)-1,2:size(data_in,2)-1))
+    
+    if (.not. iszero(data_intpl-data_exact)) then
+      call abort_handle(" ! FAIL  @ Inconsistent sine_filter", __FILE__, __LINE__)
+    end if
+    
+    
+    deallocate(data_intpl)
+    deallocate(data_exact)
+    deallocate(data_in)
+    
     write(6, "(a)") &
       "! ----------- Passed unittest_fftw ----------- !"
   end subroutine unittest_fftw
@@ -1141,6 +1180,12 @@ contains
     ! Timer
     type(timer), save :: total_timer, commun_timer, propose_timer
     
+    ! Use Eulerian time-average
+    type(field) :: psi_EM
+    real(kind=dp) :: t_avg
+    integer :: layer
+    ! Use Eulerian time-average
+    
     ! Timer
     call reset(total_timer)
     call reset(commun_timer)
@@ -1148,8 +1193,8 @@ contains
     call start(total_timer)
 
     ! m, n: DOF/control
-    m = 16
-    n = 16
+    m = 64
+    n = 64
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
@@ -1162,14 +1207,33 @@ contains
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m-1, n-1, 8+1, 8+1) 
+    call allocate(dof, m-1, n-1, 8+1, 8+1)
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
-
+   
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
     call init_dof(dof, sc)
 
+    !! Use Eulerian time-average
+    layer = 1
+    call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
+    
+    ! Time-average + rescale wrt mesh
+    psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
+    psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
+    t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
+    ! call write(psi_EM, trim("./unittest/meanflow/psi_test"), t_avg, 0)
+    write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
+    
+    ! Filter out
+    call sine_filter(dof%psi%data, &
+      psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,1)-1) )
+    dof%ndof = 3*(dof%m_K*dof%n_K)
+    !call write_theta(dof, trim("./unittest/meanflow/theta_EM"), sc, 0)
+    call deallocate(psi_EM)
+    !! End: Use Eulerian time-average
+    
     ! Read trajectory
     call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
 
@@ -1201,6 +1265,7 @@ contains
     call print_info(dof)
     call print_info(IndFn)
     call print_info(h, nts, sc)
+
 !     call print_info(jumps, mesh)
     
 !   likelihood for each indicator function
@@ -1233,7 +1298,7 @@ contains
     write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
     
-    call write_theta(dof_old, trim(output_fld)//"theta_unstructured", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_EM", sc, ind)
     
     call reset_timestep_timers()
     call reset_inference_timers()
@@ -1246,7 +1311,11 @@ contains
         call set(dof, dof_old)
         
         ! Proposal
-        call propose_dof_canon(dof, canon_SSD, canon_id)
+        !call propose_dof_canon(dof, canon_SSD, canon_id)
+        !! Use Eulerian time-average
+        call propose_dof_EM(dof, canon_SSD, canon_id)
+        !! End: Use Eulerian time-average
+        
         call reverse_dof_to_dof_inv(dof_inv, dof)
         
         ! Evaluate likelihood
@@ -1286,12 +1355,12 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_unstructured", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_EM", sc, ind)
       end if
     end do
 
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_unstructured", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_EM", sc, -1)
 
     ! Release memory
     ! MH
@@ -1830,5 +1899,306 @@ contains
     call deallocate(IndFn)
 
   end subroutine unittest_FPsolver_INPUT
+  
+  subroutine unittest_TG_instability()
+    use omp_lib
+    type(jumpsdat), dimension(:), pointer :: jumps
+    type(trajdat) :: traj
+
+    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    type(meshdat) :: mesh
+
+    type(dofdat) :: dof, dof_MAP, dof_old
+    type(IndFndat) :: IndFn
+
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
+    real(kind=dp) :: sc, h, dt
+    integer :: nts
+    real(kind=dp), dimension(:), allocatable :: logPost, canon_SSD
+    real(kind=dp) :: logPrior
+    
+    integer :: canon_id
+    integer :: iter, niter, ind
+    real(kind=dp) :: alphaUniRV
+    real(kind=dp), dimension(1) :: UniRV
+
+    integer, parameter :: Td = 1
+    character(len = *), parameter :: RunProfile = "zero_const"
+    character(len = 256) :: output_fld, Td_char, resol_param
+
+    ! Extra variables
+    type(dofdat) :: dof_solver  ! Refined dof for solver
+    real(kind=dp) :: kappa, a16, logLik
+    real(kind=dp) :: kappa_old, a16_old, logLik_old
+    character(len = 256) :: scrstr
+    integer :: i, j, k, wavenumber
+    type(field) :: q
+    character(len = 256) ::output_q
+
+    
+    ! m, n: DOF/control
+    m = 1
+    n = 1
+    ! m_solver: solver grid
+    m_solver = 256
+    ! m_Ind, n_Ind: indicator functions
+    m_Ind = 1
+    n_Ind = m_Ind
+    
+    write(Td_char, "(a,i0,a)") "h", Td, "d"
+    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
+    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
+    write(6, "(a, a)") "Output path: ", trim(output_fld)
+    
+    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
+    call allocate(dof, m, n, 1, 1) 
+    ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
+    call allocate(IndFn, m_Ind, n_Ind)
+
+    ! Initialise fields
+    sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
+    call init_dof(dof, sc)
+
+    ! Read trajectory
+    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
+
+    ! Ensure the positions are normalised
+    if (.not. check_normalised_pos(traj)) then
+      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
+    end if
+
+    ! Allocate array of jumps with initial positions
+    call allocate(jumps, mesh)
+
+    ! Convert trajectory into jumps
+    call traj2jumps(jumps, traj, mesh)
+    call deallocate(traj)
+    
+    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
+    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
+
+    ! Calculate nts = number of timesteps needed in solving FP
+    dt = 0.005_dp*3600.0_dp  ! 3 hours, in seconds
+    nts = int((h/sc)/dt)    ! 2 hours time step
+
+    ! Print info to screen
+    call print_info(mesh)
+    call print_info(dof)
+    call print_info(IndFn)
+    call print_info(h, nts, sc)
+!     call print_info(jumps, mesh)
+    
+    call allocate(dof_solver, mesh)
+    
+    
+    ! Look for a MLE by random walk
+    wavenumber = 32
+    
+    a16_old = 2.0_dp*L *sc
+    kappa_old = 0.02_dp * L *sc/100.0_dp
+    
+!     call set(dof_solver%psi, 0.0_dp)
+!     call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
+!       
+!     call set(dof_solver%K11, kappa)
+!     call set(dof_solver%K22, kappa)
+!     call set(dof_solver%K12, 0.0_dp)
+!     
+!     logLik_old = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+! 
+!     do k = 1, 500
+!       a16 = a16_old*(1.0_dp + 0.1_dp*randn())
+!       kappa = kappa_old*(1.0_dp + 0.1_dp*randn())
+!     
+!       ! Only need to pass the interior points
+!       call set(dof_solver%psi, 0.0_dp)
+!       call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
+!       
+!       call set(dof_solver%K11, kappa)
+!       call set(dof_solver%K22, kappa)
+!       call set(dof_solver%K12, 0.0_dp)
+!       
+!       logLik = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+!       
+! !       write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
+! !           "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
+! !       write(6, *) trim(scrstr)
+!       
+!       if (logLik .gt. logLik_old) then
+!         a16_old = a16
+!         kappa_old = kappa
+!         logLik_old = logLik
+!         
+!         
+!         write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
+!           "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
+!         write(6, *) trim(scrstr)
+!         flush(6)
+!       end if
+!     end do
+    
+    
+    !! Output video for MLE
+    write(6, *) "Output video"
+    a16 = a16_old
+    kappa = kappa_old
+    
+    ! Only need to pass the interior points
+    call set(dof_solver%psi, 0.0_dp)
+    call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
+      
+    call set(dof_solver%K11, kappa)
+    call set(dof_solver%K22, kappa)
+    call set(dof_solver%K12, 0.0_dp)
+
+    call print_info(dof_solver%psi, h/nts)
+
+    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+
+    call initialise_q_Gaussian(q, mesh)
+    call imposeBC(q)
+    
+    write(output_q, "(a)") "./unittest/cellular/q"
+    call write(q, trim(output_q), 0.0_dp, 0)
+    
+    do i = 1, nts
+      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
+      call write(q, trim(output_q), (h/sc)/nts*i, i)
+    end do
+    
+    call deallocate(q)
+    
+    stop
+    
+    write(6, "(a)") "a16, kappa, logLik"
+    
+    k = 0
+    do i = 1, 10
+      do j = 1, 10
+        k = k + 1
+        a16 = 1.0_dp * real(i-1, kind=dp) *sc
+        kappa = 0.01_dp * real(j, kind=dp) *sc
+        
+        ! Only need to pass the interior points
+        call set(dof_solver%psi, 0.0_dp)
+        call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), 16 , a16)
+        
+        call set(dof_solver%K11, kappa)
+        call set(dof_solver%K22, kappa)
+        call set(dof_solver%K12, 0.0_dp)
+        
+        dof_solver%SlogPost = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+        
+        write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
+          "arr(", k, ",:)= [", a16, ",",  kappa, ", ", dof_solver%SlogPost, "]"
+        write(6, *) trim(scrstr)
+      end do
+    end do
+    
+    ! Release memory
+    call deallocate(dof_solver)
+    
+    call deallocate(dof)
+    call deallocate(IndFn)
+    call deallocate(jumps)
+    
+    write(6, "(a)") &
+    "! ----------- Passed unittest_TG_instability ----------- !"
+
+  end subroutine unittest_TG_instability
+  
+  real(kind=dp) function eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(meshdat), intent(in) :: mesh
+    type(dofdat), intent(in) :: dof_solver
+    real(kind=dp), intent(in) :: h
+    integer, intent(in) :: nts
+
+    type(field) :: q
+    integer :: jump
+    real(kind=dp) :: lik
+    integer :: k_i, i
+
+    eval_Gaussian_loglik = 0.0_dp
+
+    ! Find out the cells corresponding to the indicator function
+    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+    
+    ! Solve FK equation
+    call initialise_q_Gaussian(q, mesh)
+    call imposeBC(q)
+    call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
+    
+    ! Evaluate likelihood
+    do k_i = 1, mesh%m*mesh%n
+      do jump = 1, jumps(k_i)%njumps
+        ! Bilinear interpolations
+        lik = eval_fldpt(q, mesh, jumps(k_i)%k_f(jump), jumps(k_i)%alpha_f(:,jump))
+        ! Set the negative probability to be 1e-16
+        lik = max(1e-16, lik)
+        eval_Gaussian_loglik = eval_Gaussian_loglik + dlog(lik)
+      end do
+    end do
+
+    call deallocate(q)
+    
+  end function eval_Gaussian_loglik
+  
+  subroutine initialise_q_Gaussian(q, mesh)
+    type(field), intent(inout) :: q
+    type(meshdat), intent(in) :: mesh
+    
+    integer :: i, j, gl
+    real(kind=dp) :: x, y, Sigma0
+    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
+
+    gl = q%glayer
+    Sigma0 = 0.05_dp
+    do j = 1, q%n
+        do i = 1, q%m
+          ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
+          x = fld_x(i, q%m, q%type_id)
+          y = fld_x(j, q%n, q%type_id)
+          
+          q%data(i+gl, j+gl) = dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.5_dp)**2)/Sigma0**2)/(2.0_dp*Pi*Sigma0**2)
+        end do
+      end do
+    
+  end subroutine initialise_q_Gaussian
+  
+  subroutine sine_basis(inout, wavenumber, amplitude)
+    ! inout: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+    
+    real(kind=dp), dimension(:, :), intent(inout) :: inout
+    integer :: wavenumber
+    real(kind=dp), intent(in) :: amplitude
+    
+    type(C_PTR) :: plan
+    real(kind=dp), dimension(:, :), allocatable :: Bpq
+    
+    integer :: i, j
+    
+    
+    allocate(Bpq(size(inout,1), size(inout,2)))
+    Bpq = 0.0_dp
+    
+    Bpq(wavenumber, wavenumber) = amplitude
+    
+    plan = fftw_plan_r2r_2d(size(inout,2),size(inout,1), Bpq, &
+                          inout, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, Bpq, inout)
+    call fftw_destroy_plan(plan)
+    
+!     inout = inout/real(4*size(inout,1)*size(inout,2), kind=dp)
+    inout = inout/4.0_dp
+    
+    deallocate(Bpq)
+    call fftw_cleanup()
+    
+  end subroutine sine_basis
   
 end program advdiff

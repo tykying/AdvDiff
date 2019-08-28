@@ -16,6 +16,23 @@
 function kappa_fldStruct = Prescribed_DiffusivityTensorField(Profile, param)
 kappa_scale = param.kappa_scale;
 
+if contains(Profile, 'const_unit')   % Constant diffusion
+    sigma1 = 1;
+    sigma2 = 1;
+    phi = 0;
+    
+    [Kxx, Kyy, Kxy]  = KCanon_to_KCarte(sigma1.^2, sigma2.^2, phi);
+    
+    BaseTensor = [Kxx, Kxy; Kxy, Kyy];
+
+    kappa  = @(x, y) kappa_scale.* BaseTensor;
+    Divkappa_r1 = @(x, y) 0.*x;
+    Divkappa_r2 = @(x, y) 0.*y;
+    Divkappa = @(x, y) [Divkappa_r1(x,y); Divkappa_r2(x,y)];
+    
+    param.kappa = kappa_scale.*BaseTensor;
+    param.theta = [sqrt(kappa_scale)*sigma1, sqrt(kappa_scale)*sigma2, phi];
+end
 
 if contains(Profile, 'const')   % Constant diffusion
     sigma1 = 1;
