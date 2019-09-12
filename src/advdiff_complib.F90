@@ -3,7 +3,7 @@ module advdiff_complib
   
   implicit none
 
-  public :: sqrt_matrix, init_random_seed, randn
+  public :: sqrt_matrix, randn, randu
   public :: KCarte_to_KCanon, KCanon_to_KCarte
   public :: unfold_matrix
   public :: ij2k, k2i, k2j
@@ -33,30 +33,46 @@ contains
     k2j = (k-1)/ m + 1
   end function k2j
   
-  ! Random Sample from normal (Gaussian) distribution, Box-muller transform
-  ! Source: https://sukhbinder.wordpress.com/fortran-random-number-generation/
-   real(kind = dp) function randn()
-    real(kind = dp) :: temp(2), r, theta
-    real(kind = dp), parameter :: PI = 4.0_dp * atan (1.0_dp)
-    
-    call RANDOM_NUMBER(temp)
-    r = (-2.0_dp*dlog(temp(1)))**0.5
-    theta = 2.0_dp*PI*temp(2)
-    randn = r*dsin(theta)
-  end function randn
   
-  subroutine init_random_seed()
-    integer :: i, n
-    integer, dimension(:), allocatable :: seed
+  ! LAPACK normal random number
+  ! Source: http://www.netlib.org/lapack/explore-html/df/dd1/group___o_t_h_e_rauxiliary_ga77e05a87ced667cbdb502aa87c72d056.html
+!   ! Alternative: Box-muller transform
+!   ! Source: https://sukhbinder.wordpress.com/fortran-random-number-generation/
+  subroutine randn(x, ISEED)
+    real(kind = dp), dimension(:), intent(out) :: x
+    integer, parameter ::  IDIST = 3        ! Standard normal
+    integer, dimension(4), optional, intent(in) :: ISEED
+
+    integer, dimension(4) :: SEED
+    integer :: j
+
+    if (present(ISEED)) then
+      SEED = ISEED
+    else
+      SEED = (/ 1989, 6, 11, 28 /)
+    end if
     
-    call RANDOM_SEED(size = n)
-    allocate(seed(n))
-          
-    seed = 1989 + 611 + 37 * (/ (i - 1, i = 1, n) /)
-    call RANDOM_SEED(PUT = seed)
-          
-    deallocate(seed)
-  end subroutine
+    call dlarnv(IDIST, SEED, size(x,1), x)
+    
+  end subroutine randn
+  
+  subroutine randu(x, ISEED)
+    real(kind = dp), dimension(:), intent(out) :: x
+    integer, parameter ::  IDIST = 1        ! Uniform on [0,1]
+    integer, dimension(4), optional, intent(in) :: ISEED
+
+    integer, dimension(4) :: SEED
+    integer :: j
+
+    if (present(ISEED)) then
+      SEED = ISEED
+    else
+      SEED = (/ 26, 8, 4, 1991 /)
+    end if
+    
+    call dlarnv(IDIST, SEED, size(x,1), x)
+    
+  end subroutine randu
   
   ! Source: https://en.wikipedia.org/wiki/Square_root_of_a_2_by_2_matrix
   subroutine sqrt_matrix(rootmat, mat)

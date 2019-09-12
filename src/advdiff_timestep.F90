@@ -9,12 +9,9 @@ module advdiff_timestep
 
   private
 
-  public :: maxmax, print_info
+  public :: print_info
   public :: imposeBC
   public :: advdiff_q
-
-  type(timer), save :: timestep_timer, assemble_timer
-  public :: reset_timestep_timers, print_timestep_timers
 
   public :: timestep_heun_Kflux, timestep_fe_Kflux
   public :: timestep_fe_Kflux_Src_stat, timestep_fe_Kflux_Src_nonstat
@@ -31,21 +28,11 @@ module advdiff_timestep
   end interface print_info
 
 contains
-  pure real(kind=dp) function maxmax(u_abs, v_abs)
-    real(kind=dp), dimension(:,:), intent(in) :: u_abs, v_abs
+  pure real(kind=dp) function CFL(u_max, dt, dx)
+    real(kind=dp), intent(in) :: u_max, dt, dx
 
-    ! Assume dx = dy = 1
     ! CFL = u*dt/dx
-    maxmax = max(maxval(u_abs), maxval(v_abs))
-
-  end function maxmax
-  
-  pure real(kind=dp) function CFL(uv_max, dt, dx)
-    real(kind=dp), intent(in) :: uv_max, dt, dx
-
-    ! Assume dx = dy = 1
-    ! CFL = u*dt/dx
-    CFL = uv_max*dt/dx
+    CFL = u_max*dt/dx
 
   end function CFL
 
@@ -113,6 +100,7 @@ contains
 
   end subroutine assemble_G_DCU
 
+  ! Corner transport upwind
   subroutine assemble_FG_CTU(F,G, dqx, dqy, uv_fld, dt)
     real(kind=dp), dimension(:,:), intent(inout) :: F,G
     real(kind=dp), dimension(:,:), intent(in) :: dqx, dqy
@@ -222,15 +210,16 @@ contains
     real(kind=dp), intent(in) :: dt
     
     integer :: i, j
+    real(kind=dp) :: tmp
       
     ! LeVeque p119
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 1, size(F, 2)
       do i = 2, size(F, 1)-1
-        if (dabs(dqx(i,j)) .gt. 1D-16) then
+!         if (dabs(dqx(i,j) .gt. 1D-16) then   !! Strange behavior with valgrind: with this line on it thinks there is a leak
           F(i,j) = F(i,j) + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) &
-                * philim(dqx(i-lu_sgn(i,j), j)/dqx(i,j)) *dqx(i,j)
-        end if
+                   * philim(dqx(i-lu_sgn(i,j), j)/dqx(i,j)) *dqx(i,j)
+!         end if
       end do
     end do
 
@@ -249,10 +238,10 @@ contains
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 2, size(G, 2)-1
       do i = 1, size(G, 1)
-        if (dabs(dqy(i,j)) .gt. 1D-16) then
+!         if (dabs(dqy(i,j)) .gt. 1D-16) then
           G(i,j) = G(i,j) + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) &
                 * philim(dqy(i, j-lv_sgn(i,j))/dqy(i,j)) *dqy(i,j)
-        end if
+!         end if
       end do
     end do
 
@@ -407,7 +396,7 @@ contains
     ! Consider the ghost point
   subroutine eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e)
     ! 5-point stencil: ignore off diagonal terms
-    ! Assumed zero flux BC
+    ! Wrong BC??
     type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
 
@@ -439,7 +428,7 @@ contains
     end do
     
   end subroutine eval_dqdt_Kfull
-
+  
     ! Consider the ghost point
   subroutine eval_dqdt_FG(dqdt, q, F, G)
     ! 5-point stencil: ignore off diagonal terms
@@ -987,7 +976,9 @@ contains
     ! F, G at boundaries will not be touched
     F = 0.0_dp
     G = 0.0_dp
-
+    dqx = 0.0_dp
+    dqy = 0.0_dp
+    
     call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
     call dx_field(dqx, q)
     call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, 0.5_dp*dt)  ! Apply limiter
@@ -998,6 +989,7 @@ contains
 
     call eval_dqdt_FG(dqdt, q, F, G)
     call timestep_fe(q, dqdt, dt)
+    call imposeBC(q)
 
     ! Deallocate
     call deallocate(dqdt)
@@ -1013,7 +1005,7 @@ contains
     type(field), intent(in) :: psi
     real(kind=dp), intent(in) :: dt
     
-    real(kind=dp) :: uv_max
+    real(kind=dp) :: u_max, v_max
 
     real(kind=dp), dimension(:, :), allocatable :: u, v
     
@@ -1021,28 +1013,20 @@ contains
     allocate(v(psi%m, psi%n+1))
 
     call psi_to_uv(u, v, psi)
-    uv_max = maxmax(dabs(u), dabs(v))
+    
+    u_max = maxval(dabs(u))
+    v_max = maxval(dabs(v))
     
     deallocate(u)
     deallocate(v)
     
     write(6, "(a)") ""
     write(6, "(a, a)") " Time stepping: ", trim(psi%name)
-    write(6, "(a,"//dp_chr//",a,i0,a,"//dp_chr//")") "|  uv_max = ", uv_max, "  dx = ", 1, " and dt = ", dt
-    write(6, "(a,"//dp_chr//")") "|  Courant number = ", CFL(uv_max, dt, 1.0_dp)
+    write(6, "(a,"//dp_chr//",a,i0,a,"//dp_chr//")") "|  uv_max = ", max(u_max, v_max), "  dx = ", 1, " and dt = ", dt
+    write(6, "(a,"//dp_chr//")") "|  Courant number in x-direction = ", CFL(u_max, dt, 1.0_dp)
+    write(6, "(a,"//dp_chr//")") "|  Courant number in y-direction = ", CFL(v_max, dt, 1.0_dp)
 
   end subroutine print_info_timestepping
-
-  subroutine reset_timestep_timers()
-    call reset(timestep_timer)
-    call reset(assemble_timer)
-  end subroutine reset_timestep_timers
-
-  subroutine print_timestep_timers()
-    write(6, "(a)") "Timestep timers:"
-    call print(timestep_timer, "Timestep increment", prefix = "  ")
-    call print(assemble_timer, "Assemble increment", prefix = "  ")
-  end subroutine print_timestep_timers
 
   subroutine advdiff_q(q, psi, K11, K22, K12, T, nts)
     type(field), intent(inout) :: q
@@ -1055,18 +1039,12 @@ contains
     type(K_flux) :: K_e
     real(kind=dp) :: dt
 
-    call start(assemble_timer)
-
-    K12%data = 0.0_dp
+    call imposeBC(q)
     
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
     call imposeBC(K_e)
-
-    call stop(assemble_timer)
-
-    call start(timestep_timer)
-
+    
     dt = T/nts
     do i = 1, nts
       call timestep_heun_Kflux(q, dt, K_e)
@@ -1074,14 +1052,8 @@ contains
 !       call timestep_LMT_1DS(q, dt, uv_fld)
     end do
 
-    call stop(timestep_timer)
-
-    call start(assemble_timer)
-
     call deallocate(uv_fld)
     call deallocate(K_e)
-
-    call stop(assemble_timer)
 
   end subroutine advdiff_q
 

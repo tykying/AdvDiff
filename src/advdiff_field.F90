@@ -20,6 +20,8 @@ module advdiff_field
   public :: fourier_intpl, cosine_intpl, sine_intpl, bilinear_intpl
   public :: neg_int
   public :: sine_filter
+  public :: del2
+  public :: dt_CFL
   
   ! Note: field and field_ptr are different
   type field
@@ -935,6 +937,28 @@ contains
 !     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt - divKgradq
 !     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt + udqx + vdqy
   end function S_rhs_stat
+  
+  subroutine del2(out, in)
+    ! Define on [0, 1] times [0, 1]
+    type(field), intent(inout) :: out
+    type(field), intent(in) :: in
+    
+    integer :: m, n
+    
+    if ((size(out%data,1) .ne. size(in%data,1)) .or. &
+          (size(out%data,2) .ne. size(in%data,2)) ) then
+      call abort_handle("Inconsistent del2", __FILE__, __LINE__)
+    end if
+    
+    m = size(in%data,1)
+    n = size(in%data,2)
+    
+    out%data = 0.0_dp
+    out%data(2:m-1,2:n-1) = in%data(3:m,2:n-1) + in%data(1:m-2,2:n-1) &
+                         + in%data(2:m-1,3:n) + in%data(2:m-1,1:n-2) &
+                         - 4.0_dp*in%data(2:m-1,2:n-1)
+    
+  end subroutine del2
 
   pure real(kind=dp) function fld_x(i, m, type_id)
     integer, intent(in) :: i, m, type_id
@@ -1099,5 +1123,29 @@ contains
     end do
 
    end function iszero
+   
+  real(kind=dp) function dt_CFL(psi, CFL)
+    type(field), intent(in) :: psi
+    real(kind=dp), intent(in) :: CFL
+    
+    real(kind=dp) :: u_max, v_max, uv_max
+    real(kind=dp), dimension(:,:), allocatable :: u, v
+    
+    allocate(u(psi%m+1,psi%n))
+    allocate(v(psi%m,psi%n+1))
+    
+    call psi_to_uv(u, v, psi)
+    
+    u_max = maxval(dabs(u))
+    v_max = maxval(dabs(v))
+    uv_max = u_max + v_max
+    
+    deallocate(u)
+    deallocate(v)
+    
+    ! CFL = u*dt/dx
+    dt_CFL = CFL/uv_max
+    
+  end function dt_CFL
 
 end module advdiff_field

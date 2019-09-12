@@ -36,17 +36,17 @@ module advdiff_trajdata
 
   type jumpsdat
     integer :: njumps
-    real(kind = dp), dimension(:, :), pointer :: alpha_i
-    real(kind = dp), dimension(:, :), pointer :: alpha_f
-    real(kind = dp), dimension(:), pointer :: h
-    integer, dimension(:), pointer :: k_f
+    real(kind = dp), dimension(:, :), allocatable :: alpha_i
+    real(kind = dp), dimension(:, :), allocatable :: alpha_f
+    real(kind = dp), dimension(:), allocatable :: h
+    integer, dimension(:), allocatable :: k_f
   end type jumpsdat
 
   type trajdat
     integer :: nparticles, nts0  ! nts0 = nts + 1 to include initial positions
-    real(kind = dp), dimension(:, :), pointer :: x
-    real(kind = dp), dimension(:, :), pointer :: y
-    real(kind = dp), dimension(:, :), pointer :: t
+    real(kind = dp), dimension(:, :), allocatable :: x
+    real(kind = dp), dimension(:, :), allocatable :: y
+    real(kind = dp), dimension(:, :), allocatable :: t
   end type trajdat
 
   type meshdat
@@ -61,9 +61,9 @@ contains
     traj%nparticles = nparticles
     traj%nts0 = nts0
 
-    allocate(traj%x(traj%nparticles, traj%nts0))
-    allocate(traj%y(traj%nparticles, traj%nts0))
-    allocate(traj%t(traj%nparticles, traj%nts0))
+    allocate(traj%x(nparticles, nts0))
+    allocate(traj%y(nparticles, nts0))
+    allocate(traj%t(nparticles, nts0))
 
   end subroutine allocate_trajdat
 
@@ -77,7 +77,7 @@ contains
   end subroutine deallocate_trajdat
 
   subroutine allocate_jumpsdat_ptr(jumps, mesh)
-    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    type(jumpsdat), dimension(:), allocatable, intent(inout) :: jumps
     type(meshdat), intent(in) :: mesh
 
     allocate(jumps(mesh%Ncell))
@@ -97,7 +97,7 @@ contains
   end subroutine allocate_jumpsdat
 
   subroutine deallocate_jumpsdat_ptr(jumps)
-    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    type(jumpsdat), dimension(:), allocatable, intent(inout) :: jumps
     integer :: cell
     
     do cell = 1, size(jumps,1)
@@ -129,7 +129,7 @@ contains
   end subroutine allocate_mesh
 
   pure real(kind = dp) function read_uniform_h(jumps)
-    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
     real(kind = dp) :: h
     integer :: cell
     
@@ -243,12 +243,12 @@ contains
 
   ! Convert trajectory (normalised to [0,1]) into jumps wrt mesh
   subroutine traj2jumps(jumps, traj, mesh)
-    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    type(jumpsdat), dimension(:), intent(inout) :: jumps
     type(trajdat), intent(in) :: traj
     type(meshdat), intent(in) :: mesh
 
-    integer, dimension(:), pointer :: njumps_ptr
-    integer, dimension(:,:), pointer :: Jcell_ptr
+    integer, dimension(:), allocatable :: njumps_ptr
+    integer, dimension(:,:), allocatable :: Jcell_ptr
 
     integer :: part, t_ind, cell
     integer :: i, j
@@ -308,12 +308,12 @@ contains
 
     ! Convert trajectory (normalised to [0,1]) into jumps wrt mesh
   subroutine traj2jumps_inv(jumps, traj, mesh)
-    type(jumpsdat), dimension(:), pointer, intent(inout) :: jumps
+    type(jumpsdat), dimension(:), intent(inout) :: jumps
     type(trajdat), intent(in) :: traj
     type(meshdat), intent(in) :: mesh
 
-    integer, dimension(:), pointer :: njumps_ptr
-    integer, dimension(:,:), pointer :: Jcell_ptr
+    integer, dimension(:), allocatable :: njumps_ptr
+    integer, dimension(:,:), allocatable :: Jcell_ptr
 
     integer :: part, t_ind, cell
     integer :: i, j
@@ -418,7 +418,7 @@ contains
   end subroutine print_info_traj
 
   subroutine print_info_jumps(jumps, mesh)
-    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
     type(meshdat), intent(in) :: mesh
 
     integer :: cell, jump

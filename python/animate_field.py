@@ -3,7 +3,7 @@ import sys
 data_folder = './unittest/q64/TTG_sinusoidal/'
 data_folder = './unittest/q64/QGM2_L1/'
 data_folder = './unittest/cellular/'
-data_folder = './unittest/meanflow/'
+#data_folder = './unittest/meanflow/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
 import numpy
@@ -23,8 +23,8 @@ def animate_full(ts):
   field_in = 'q146'
   field_in = 'rev_q146'
   field_in = 'q'
-  field_in = 'psi_test'
-  field_in = 'psi_filtered'
+  #field_in = 'psi_test'
+  #field_in = 'psi_filtered'
   field_data = data_folder + field_in + '_' + ts_in
 
 
@@ -61,7 +61,7 @@ def animate_full(ts):
   axarr[1].set_aspect('equal')
 
 #ani = FuncAnimation(fig, animate_full, frames=range(0, 256+1, 8)) #, blit=True)
-ani = FuncAnimation(fig, animate_full, frames=range(0, 2400+1, 800)) #, blit=True)
+ani = FuncAnimation(fig, animate_full, frames=range(0, 2400+1, 12)) #, blit=True)
 #animate_full(0)
 plt.show()
 

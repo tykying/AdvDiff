@@ -12,7 +12,7 @@ module advdiff_io
 
   private
 
-  public :: read_header, read, write, read_theta, read_QGfield
+  public :: read_header, read, write, write_txt, read_theta, read_QGfield
 
   interface read_header
     module procedure read_field_header, read_traj_header
@@ -24,8 +24,13 @@ module advdiff_io
 
   ! Interface: allowing overloading the 'write' function by the parameters input
   interface write
-    module procedure write_field, write_traj, write_dof, write_array
+    module procedure write_field, write_dof
   end interface write
+  
+  interface write_txt
+    module procedure write_array_dp1d, write_array_dp, write_array_int
+  end interface write_txt
+
 
   type(timer), save :: write_field_timer
   public :: reset_io_timers, print_io_timers, write_theta
@@ -125,7 +130,22 @@ contains
 
   end subroutine write_field
 
-  subroutine write_array(array, filename)
+  subroutine write_array_dp1d(array, filename)
+    real(kind=dp), dimension(:), intent(in) :: array
+    character(len = *), intent(in) :: filename
+    character(len = 16) :: collen
+    integer :: i
+
+    write(collen, "(i0)") size(array, 1)
+
+    open(unit = output_unit, file = trim(filename) // ".txt", &
+      & status = "replace", action = "write")
+    write(output_unit, '('//collen//'('//dp_chr//', ","))') array
+    close(output_unit)
+
+  end subroutine write_array_dp1d
+  
+  subroutine write_array_dp(array, filename)
     real(kind=dp), dimension(:,:), intent(in) :: array
     character(len = *), intent(in) :: filename
     character(len = 16) :: collen
@@ -140,7 +160,24 @@ contains
     end do
     close(output_unit)
 
-  end subroutine write_array
+  end subroutine write_array_dp
+  
+  subroutine write_array_int(array, filename)
+    integer, dimension(:,:), intent(in) :: array
+    character(len = *), intent(in) :: filename
+    character(len = 16) :: collen
+    integer :: i
+
+    write(collen, "(i0)") size(array, 2)
+
+    open(unit = output_unit, file = trim(filename) // ".txt", &
+      & status = "replace", action = "write")
+    do i = 1, size(array, 1)
+      write(output_unit, '('//collen//'(i0, ","))') array(i, :)
+    end do
+    close(output_unit)
+
+  end subroutine write_array_int
 
   subroutine read_traj_header(traj, filename, t, index)
     type(trajdat), intent(out) :: traj
@@ -214,46 +251,6 @@ contains
     close(input_unit)
 
   end subroutine read_traj
-
-  subroutine write_traj(traj, filename, t, index)
-    type(trajdat), intent(in) :: traj
-    character(len = *), intent(in) :: filename
-    real(kind = dp), intent(in) :: t
-    integer, optional, intent(in) :: index
-
-    character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
-
-    if(present(index)) then
-      write(lfilename, "(a,a,i0)") trim(filename), "_", index
-    else
-      lfilename = trim(filename)
-    end if
-
-    open(unit = output_unit, file = trim(lfilename) // ".hdr", &
-      & status = "replace", action = "write")
-    write(output_unit, "(a)") "serial"
-    write(output_unit, "(a)") "traj"
-    write(output_unit, "(i0,a,i0)") traj%nparticles, " ", traj%nts0
-    write(output_unit, "(i0)") 2
-    write(output_unit, "("//dp_chr//")") t
-    close(output_unit)
-
-    open(unit = output_unit, file = trim(lfilename) // "_x.dat", &
-      & status = "replace", access = "stream", action = "write")
-    write(output_unit) traj%x
-    close(output_unit)
-
-    open(unit = output_unit, file = trim(lfilename) // "_y.dat", &
-      & status = "replace", access = "stream", action = "write")
-    write(output_unit) traj%y
-    close(output_unit)
-
-    open(unit = output_unit, file = trim(lfilename) // "_t.dat", &
-      & status = "replace", access = "stream", action = "write")
-    write(output_unit) traj%t
-    close(output_unit)
-
-  end subroutine write_traj
 
   subroutine write_dof(dof, filename, SlogPost, sc, index)
     type(dofdat), intent(in) :: dof
@@ -428,6 +425,10 @@ contains
     close(input_unit)
     
     call allocate(dof, m_psi, n_psi, m_K, n_K)
+    dof%ndof = m_psi*n_psi + 3*m_K*n_K
+    dof%SlogPost = SlogPost
+    dof%occurrence = occurrence
+    
   end subroutine read_theta_header
   
   subroutine read_theta(dof, filename, sc, index)
@@ -452,6 +453,7 @@ contains
     call read_theta_header(dof, filename, index)
     
     call allocate(theta, dof)
+    theta = 0.0_dp
     
     write(6, *) "Reading: "// trim(lfilename) // ".dat"
     
@@ -460,6 +462,7 @@ contains
     read(input_unit) theta
     close(input_unit)
     
+    
     if(present(sc)) then
       rsc = sc
     else
@@ -467,6 +470,7 @@ contains
     end if
     
     call convert_theta_to_dof(dof, theta, rsc)
+    call imprint_canon(dof)
     
     deallocate(theta)
     

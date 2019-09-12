@@ -25,19 +25,26 @@ contains
     !call unittest_fftw()
     !call unittest_solver_timing()
     !call unittest_IO()
+    !call unittest_timer()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
     !call unittest_inference_OMP()
+    call unittest_validate_inference()
     !call unittest_optimisation_OMP()
-    call unittest_TG_instability()
+    !call unittest_TG_instability()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
   subroutine unittest_comptools()
-    real(kind = dp) :: mean, stdv, mu, sigma, gamma, sample
-    real(kind = dp), dimension(2,2) :: K, Krt
-    integer :: i, n, m, r
-    real(kind = dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
+    real(kind=dp) :: mean, stdv, mu, sigma, gamma, sample
+    real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
+    real(kind=dp), dimension(2,2) :: K, Krt
+    integer :: i, j, n, m, r
+    real(kind=dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
+    
+    type(field) :: rel, psi
+    real(kind=dp) :: x, y
+    real(kind=dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
 
     ! Mod and division
     n = 11
@@ -71,15 +78,20 @@ contains
     ! randn generator
     mean = 2.0_dp
     stdv = 5.0_dp
-    n = 10000
+    n = 1000000
 
-    call init_random_seed();
+    ! Test randn()
     mu = 0.0_dp
     sigma = 0.0_dp
-
+    gamma = 0.0_dp
+    
+    allocate(stdnRV(n))
+    call randn(stdnRV)
+    
     do i = 1, n
-      sample = mean + stdv * randn()
-
+      sample = mean + stdv * stdnRV(i)
+!      sample = 0.0_dp
+      
       mu = mu + sample
       sigma = sigma + sample*sample
       gamma = gamma + sample*sample*sample
@@ -89,7 +101,9 @@ contains
     sigma = dsqrt(sigma/n - mu*mu)
     gamma = (gamma/n - 3.0_dp*mu*sigma*sigma - mu*mu*mu)/(sigma*sigma*sigma)
 
-    write(6, "(a, i0)") " Testing random number generator: n = ", n
+    deallocate(stdnRV)
+    
+    write(6, "(a, i0)") " Testing standard normal random number generator: n = ", n
     write(6, "(a,"//dp_chr//","//dp_chr//","//dp_chr//")") "| Truth = ", mean, stdv, 0.0_dp
     write(6, "(a,"//dp_chr//","//dp_chr//","//dp_chr//")") "| Computed", mu, sigma, gamma
 
@@ -98,6 +112,46 @@ contains
        (dabs((0.0_dp - gamma)) > 0.01) ) then
       call abort_handle("  !! E: Random number generator", __FILE__, __LINE__)
     end if
+    
+    ! randu
+    mean = 0.5_dp
+    stdv = dsqrt(1.0_dp/12.0_dp)
+    n = 1000000
+
+    ! Test randn()
+    mu = 0.0_dp
+    sigma = 0.0_dp
+    gamma = 0.0_dp
+    
+    allocate(UniRV(n))
+    call randu(UniRV)
+    
+    do i = 1, n
+      sample = UniRV(i)
+!      sample = 0.0_dp
+      
+      mu = mu + sample
+      sigma = sigma + sample*sample
+      gamma = gamma + sample*sample*sample
+    end do
+
+    mu = mu/n
+    sigma = dsqrt(sigma/n - mu*mu)
+    gamma = (gamma/n - 3.0_dp*mu*sigma*sigma - mu*mu*mu)/(sigma*sigma*sigma)
+
+    deallocate(UniRV)
+    
+    write(6, "(a, i0)") " Testing uniform(0, 1) random number generator: n = ", n
+    write(6, "(a,"//dp_chr//","//dp_chr//","//dp_chr//")") "| Truth = ", mean, stdv, 0.0_dp
+    write(6, "(a,"//dp_chr//","//dp_chr//","//dp_chr//")") "| Computed", mu, sigma, gamma
+
+    if ( (dabs((mean - mu)/mu) > 0.02) .or. &
+       (dabs((stdv - sigma)/sigma) > 0.02) .or. &
+       (dabs((0.0_dp - gamma)) > 0.01) ) then
+      call abort_handle("  !! E: Random number generator", __FILE__, __LINE__)
+    end if
+    
+    
     write(6, "(a)") "  -- P: Passed simple random number generator test"
 
     ! sqrt of a matrix
@@ -143,12 +197,41 @@ contains
     end if
     write(6, "(a)") "  -- P: Passed KCarte <-> KCanon conversion test"
     
+    
+    m = 1024
+    n = m
+    call allocate(psi, m, n, "psi", glayer=0, type_id=1)
+    call allocate(rel, psi%m, psi%n, "rel", glayer=psi%glayer, type_id=psi%type_id)
+    
+    do j = 1, size(psi%data, 2)
+      do i = 1, size(psi%data, 1)
+        x = fld_x(i, psi%m, psi%type_id)
+        y = fld_x(j, psi%n, psi%type_id)
+        
+        psi%data(i,j) = dsin(2.0_dp* Pi * x) * dsin(Pi * y)
+      end do
+    end do
+    
+    call del2(rel, psi)
+    
+!     call print_array(rel%data*m*m, "rel*m*m")
+!     call print_array(((2.0_dp*Pi)**2 + Pi**2)*psi%data, "((2.0_dp*Pi)**2 + Pi**2)*psi%data")
+    
+!     if (.not. iszero(rel%data*m*m + ((2.0_dp*Pi)**2 + Pi**2)*psi%data) ) then
+!         call abort_handle("del2: inconsistent", __FILE__, __LINE__)
+!     end if
+
+    call deallocate(rel)
+    call deallocate(psi)
+    
+    write(6, "(a)") "  -- P: del2 consistent"
+    
     write(6, "(a)") &
       "! ----------- Passed unittest_comptools ----------- !"
   end subroutine unittest_comptools
 
   subroutine unittest_trajdata()
-    type(jumpsdat), dimension(:), pointer :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps
     integer :: m, n, cell
     type(meshdat) :: mesh
 
@@ -296,7 +379,7 @@ contains
 
     !dt_UB = 1.0_dp/maxmax(uv_fld%u_abs, uv_fld%v_abs)
     !nts = ceil(t/(1/dt_UB))
-    nts = floor(10.0_dp*floor(t*maxmax(uv_fld%u_abs, uv_fld%v_abs)))+1
+    nts = floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
     dt = t/nts
 
     ! Reset q
@@ -473,7 +556,7 @@ contains
     
     call set(q0, q)
     t = 10.0_dp*Pi
-    nts = floor(10.0_dp*floor(t*maxmax(uv_fld%u_abs, uv_fld%v_abs)))+1
+    nts = floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
     dt = t/nts
     
     call print_info(psi, dt)
@@ -1104,6 +1187,8 @@ contains
       call abort_handle("!!! --F: testcase IO", __FILE__, __LINE__)
     end if
     
+    call deallocate(traj)
+!     
     ! m, n: DOF/control
     m = 4
     n = m
@@ -1119,34 +1204,68 @@ contains
 
     call set(dof%K11, 0.5_dp*kappa_scale*sc)
     call set(dof%K22, 0.5_dp*kappa_scale*sc)
-    call set(dof%K12, 0.0_dp*sc)
+    call set(dof%K12, 0.1_dp*sc)
 
     call print_info(mesh)
     call print_info(dof)
     
     call print_array(dof%K22%data)
+    call print_array(dof%K12%data)
     
-     call write_theta(dof, "./unittest/test_theta", sc, 1)
-
+    call write_theta(dof, "./unittest/test_theta", sc, 1)
     call print_info(dof)
     
     call deallocate(dof)
-
+    
     call read_theta(dof, "./unittest/test_theta", sc, 1)
     
     call print_info(dof)
     call print_array(dof%K22%data)
-    
+    call print_array(dof%K12%data)
+
     call deallocate(dof)
 
     write(6, "(a)") &
       "! ----------- Passed unittest_IO ----------- !"
   end subroutine unittest_IO
   
+  subroutine unittest_timer()
+    integer :: i, j
+    real(kind=dp) :: t, t2
+    real(kind=dp), dimension(200000) :: dummy_t
+    ! Timer
+    type(timer), save :: total_timer
+    
+    call start(total_timer)
+    
+    t = 2.0D0
+    !$OMP PARALLEL DO PRIVATE(j) num_threads(32)
+    do i = 1, size(dummy_t)
+      t2 = (1.0D0 + dlog(i*t)*3.0D0)/dlog(t)
+      
+      do j = 1, 200000
+        t2 = t2 * (1.0D0 + dlog(i*t)*3.0D0)/dlog(t)
+      end do
+      
+      dummy_t(i) = t2 * (1.0D0 + dlog(i*t)*3.0D0)/dlog(t)
+    end do
+    !$OMP END PARALLEL DO
+    
+    call stop(total_timer)
+
+    write(6, *) sum(dummy_t)
+
+    
+    call print(total_timer, "total_timer")
+    
+    write(6, "(a)") &
+      "! ----------- Passed unittest_timer ----------- !"
+  end subroutine unittest_timer
+  
   subroutine unittest_inference_OMP()
     use omp_lib
-    type(jumpsdat), dimension(:), pointer :: jumps
-    type(jumpsdat), dimension(:), pointer :: jumps_inv
+    type(jumpsdat), dimension(:), allocatable :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
 !     real(kind=dp) :: T
 
@@ -1157,18 +1276,20 @@ contains
     type(dofdat) :: dof_inv
     type(IndFndat) :: IndFn
 
+    real(kind=dp) :: sc, h, dt
+    integer :: nts
+    
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
-    real(kind=dp) :: sc, h, dt
-    integer :: nts
-    real(kind=dp), dimension(:), allocatable :: logPost, canon_SSD
-    real(kind=dp) :: logPrior
+    
+    integer, parameter :: ntune = 1
+    integer, dimension(:, :), allocatable :: accept_counter
+    real(kind=dp), dimension(:), allocatable :: canon_SSD
     
     integer :: canon_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
-    real(kind=dp), dimension(1) :: UniRV
 
     integer, parameter :: Td = 32
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
@@ -1178,7 +1299,7 @@ contains
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
-    type(timer), save :: total_timer, commun_timer, propose_timer
+    type(timer), save :: total_timer
     
     ! Use Eulerian time-average
     type(field) :: psi_EM
@@ -1186,19 +1307,30 @@ contains
     integer :: layer
     ! Use Eulerian time-average
     
-    ! Timer
-    call reset(total_timer)
-    call reset(commun_timer)
-    call reset(propose_timer)
-    call start(total_timer)
-
+    ! Prior
+    type(priordat) :: prior_param
+    
+    ! Random number generator
+    real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
+    integer :: RV_ind
+    
+    integer :: restart_ind = 0
+    
     ! m, n: DOF/control
-    m = 64
-    n = 64
+    m = 20
+    n = 20
+    ! m_solver: solver grid
+    m_solver = 80
+    ! m_Ind, n_Ind: indicator functions
+    m_Ind = 20
+    n_Ind = m_Ind
+    
+    m = 8
+    n = 8
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
-    m_Ind = 16
+    m_Ind = 8
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -1207,32 +1339,41 @@ contains
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m-1, n-1, 8+1, 8+1)
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     call allocate(IndFn, m_Ind, n_Ind)
    
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call init_dof(dof, sc)
 
-    !! Use Eulerian time-average
-    layer = 1
-    call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
+    if (restart_ind .gt. 0) then
+      write(6, *) "Before loading dof: sc = ",sc
+      call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
+      write(6, *) "After loading dof: sc = ",sc
+    else
+      call allocate(dof, m-1, n-1, m/2+1, n/2+1)
+      call init_dof(dof, sc)
+    end if
     
-    ! Time-average + rescale wrt mesh
-    psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
-    psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
-    t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
-    ! call write(psi_EM, trim("./unittest/meanflow/psi_test"), t_avg, 0)
-    write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
+!     !! Use Eulerian time-average
+!     layer = 1
+!     call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
+!     
+!     ! Time-average + rescale wrt mesh
+!     psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
+!     psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
+!     t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
+!     ! call write(psi_EM, trim("./unittest/meanflow/psi_test"), t_avg, 0)
+!     write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
+!     
+!     ! Filter out
+!     call sine_filter(dof%psi%data, &
+!       psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,1)-1) )
+!     dof%ndof = 3*(dof%m_K*dof%n_K)
+!     !call write_theta(dof, trim("./unittest/meanflow/theta_EM"), sc, 0)
+!     call deallocate(psi_EM)
+!     !! End: Use Eulerian time-average
     
-    ! Filter out
-    call sine_filter(dof%psi%data, &
-      psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,1)-1) )
-    dof%ndof = 3*(dof%m_K*dof%n_K)
-    !call write_theta(dof, trim("./unittest/meanflow/theta_EM"), sc, 0)
-    call deallocate(psi_EM)
-    !! End: Use Eulerian time-average
+    call allocate(prior_param, sc)
     
     ! Read trajectory
     call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
@@ -1255,8 +1396,10 @@ contains
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
 
     ! Calculate nts = number of timesteps needed in solving FP
-    dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
     dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
 
@@ -1269,8 +1412,7 @@ contains
 !     call print_info(jumps, mesh)
     
 !   likelihood for each indicator function
-    allocate(logPost(IndFn%nIND))
-!     allocate(logPost_old(IndFn%nIND))
+    allocate(accept_counter(IndFn%nIND, ntune))
     call allocate(canon_SSD, dof)
     
     ! MCMC
@@ -1278,68 +1420,67 @@ contains
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     
-    call init_random_seed();
     ! Tune proposal distribution: SSD
+    accept_counter = 0
     call init_canon_SSD(canon_SSD, dof, sc)
     
     ! Set reverse psi
     call reverse_dof_to_dof_inv(dof_inv, dof)
     
     ! Initialise
-    call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-    dof%SlogPost = real(sum(logPost), kind=dp)
-!     call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
-!     dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
-    
+    dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+
     call set(dof_old, dof)
     call set(dof_MAP, dof)
-    
-    ind = 0
-    write(6, "(i0, a, "//dp_chr//")") 0, "-th step: logPost = ", dof_old%SlogPost
+
+    ind = restart_ind
+    write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
     
-    call write_theta(dof_old, trim(output_fld)//"theta_EM", sc, ind)
+     call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
     
-    call reset_timestep_timers()
-    call reset_inference_timers()
+    ! Generate random numbers
+    niter = 400
+    niter = 1
+    allocate(stdnRV(niter*dof%ndof))
+    allocate(UniRV(niter*dof%ndof))
+    call randn(stdnRV)
+    call randu(UniRV)
     
-    niter = max(1250, m*m)
+    ! Timer
+    call reset(total_timer)
+    call start(total_timer)
+    
     do iter = 1, niter
       ! In each iteration loop over all cells
-      do canon_id = 1, dof%ndof
+!       do canon_id = 1, dof%ndof
+      do canon_id = 1, 2
+        RV_ind = (iter-1)*dof%ndof + canon_id
+        
         ! Initialise K_prop
         call set(dof, dof_old)
         
         ! Proposal
-        !call propose_dof_canon(dof, canon_SSD, canon_id)
+        call propose_dof_canon(dof, canon_SSD, canon_id, stdnRV(RV_ind))
         !! Use Eulerian time-average
-        call propose_dof_EM(dof, canon_SSD, canon_id)
+        !! call propose_dof_EM(dof, canon_SSD, canon_id, stdnRV(RV_ind))
         !! End: Use Eulerian time-average
         
         call reverse_dof_to_dof_inv(dof_inv, dof)
         
         ! Evaluate likelihood
-        call evaluate_logPrior(logPrior, dof, sc)
-        if (logPrior .gt. -1E14) then
-          call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-          dof%SlogPost = real(sum(logPost), kind=dp)
-!           call evaluate_loglik_OMP(logPost, jumps_inv, IndFn, mesh, dof_inv, h, nts)
-!           dof%SlogPost = dof%SlogPost + real(sum(logPost), kind=dp)
-          
-          ! Metropolis-Hastings
-          alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
-          call RANDOM_NUMBER(UniRV)
-          
-          if (UniRV(1) < alphaUniRV) then
-            ! Accepted
-            call set(dof_old, dof)
-            dof_old%occurrence = 1
-          else
-            ! Rejected by low posterior
-            dof_old%occurrence = dof_old%occurrence + 1
-          end if
+        dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+        
+        ! Metropolis-Hastings
+        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
+        
+        if (UniRV(RV_ind) < alphaUniRV) then
+          ! Accepted
+          call set(dof_old, dof)
+          dof_old%occurrence = 1
+          accept_counter(canon_id, ntune) = accept_counter(canon_id, ntune) + 1
         else
-          ! Rejected by prior
+          ! Rejected by low posterior
           dof_old%occurrence = dof_old%occurrence + 1
         end if
         
@@ -1351,22 +1492,31 @@ contains
       
       ! I/O
       if (mod(iter, 10) .eq. 0) then
-        write(6, "(i0, a, "//dp_chr//")") iter, "-th step: logPost = ", dof_old%SlogPost
+        write(6, "(i0, a, "//dp_chr//")") restart_ind*10 + iter, "-th step: logPost = ", dof_old%SlogPost
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_EM", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
       end if
     end do
-
+    ! Timer
+    call stop(total_timer)
+    write(6, "(a)") "Total timers:"
+    call print(total_timer, "Total time on a node", prefix = "  ")
+    
     ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_EM", sc, -1)
+    call write_theta(dof_MAP, trim(output_fld)//"theta_sigma", sc, -1)
+    call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
+    call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
 
     ! Release memory
     ! MH
+    deallocate(stdnRV)
+    deallocate(UniRV)
+    call deallocate(prior_param)
+    deallocate(accept_counter)
     deallocate(canon_SSD)
     
-    deallocate(logPost)
     call deallocate(dof_old)
     call deallocate(dof_MAP)
 
@@ -1376,29 +1526,232 @@ contains
     call deallocate(jumps)
     call deallocate(jumps_inv)
     
-    ! Timer
-    call stop(total_timer)
-    call print_timestep_timers()
-    call print_inference_timers()
-
-    write(6, "(a)") "Proposal timers:"
-    call print(propose_timer, "Proposal on node 0", prefix = "  ")
-
-    write(6, "(a)") "Communication timers:"
-    call print(commun_timer, "communication on node 0", prefix = "  ")
-
-    write(6, "(a)") "Total timers:"
-    call print(total_timer, "Total time on a node", prefix = "  ")
-
     write(6, "(a)") &
     "! ----------- Passed unittest_inference_OMP ----------- !"
 
   end subroutine unittest_inference_OMP
   
+  subroutine unittest_validate_inference()
+    use omp_lib
+    type(jumpsdat), dimension(:), allocatable :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps_inv
+    type(trajdat) :: traj
+
+    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    type(meshdat) :: mesh
+
+    type(dofdat) :: dof, dof_inv, dof_EM, dof_Davis
+    type(IndFndat) :: IndFn
+
+    real(kind=dp) :: sc, h, dt
+    integer :: nts
+    
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
+    
+    integer, parameter :: ntune = 1
+
+    integer, parameter :: Td = 32
+!    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
+     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
+!    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
+    character(len = 256) :: output_fld, Td_char, resol_param
+
+    ! Timer
+    type(timer), save :: total_timer
+    
+    ! Use Eulerian time-average
+    type(field) :: psi_EM
+    real(kind=dp) :: t_avg
+    integer :: layer
+    ! Use Eulerian time-average
+    
+    integer :: restart_ind = 100
+    
+    integer :: INDk, nts_adapted
+
+    type(dofdat) :: dof_solver  ! Refined dof for solver
+    real(kind=dp) :: dt_min, dt_arg
+    type(field) :: q
+    character(len = 256) ::output_q
+    real(kind=dp), dimension(3) :: Gauss_param    !=(mean_x, mean_y, sigma)
+    integer :: i, j, nx, ny
+    
+    ! m, n: DOF/control
+    m = 16
+    n = 16
+    ! m_solver: solver grid
+    m_solver = 64
+    ! m_Ind, n_Ind: indicator functions
+    m_Ind = 16
+    n_Ind = m_Ind
+    
+    write(Td_char, "(a,i0,a)") "h", Td, "d"
+    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
+    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
+    write(6, "(a, a)") "Output path: ", trim(output_fld)
+    
+    m_solver = 64
+    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
+    ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
+    
+    ! Initialise fields
+    sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
+    call read_theta(dof, trim(output_fld)//"theta_canon", sc, restart_ind)
+!     call allocate(dof, m-1, n-1, m/2+1, n/2+1)
+!     call init_dof(dof, sc)
+    
+    ! Read trajectory
+    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
+    
+    ! Ensure the positions are normalised
+    if (.not. check_normalised_pos(traj)) then
+      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
+    end if
+    
+    ! Allocate array of jumps with initial positions
+    call allocate(jumps, mesh)
+    call allocate(jumps_inv, mesh)
+    
+    ! Convert trajectory into jumps
+    call traj2jumps(jumps, traj, mesh)
+    call traj2jumps_inv(jumps_inv, traj, mesh)
+    call deallocate(traj)
+    
+    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
+    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
+
+    ! Calculate nts = number of timesteps needed in solving FP
+    !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
+    dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    nts = int((h/sc)/dt)    ! 2 hours time step
+    
+    ! Alternative
+    call allocate(IndFn, m_Ind, n_Ind)
+    
+    ! Print info to screen
+    call print_info(mesh)
+    call print_info(dof)
+    call print_info(IndFn)
+    call print_info(h, nts, sc)
+!     call print_info(jumps, mesh)
+    
+    ! MCMC
+    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
+    
+    ! Set reverse psi
+    call reverse_dof_to_dof_inv(dof_inv, dof)
+    
+    ! Timer
+    call reset(total_timer)
+    call start(total_timer)
+
+    
+    call allocate(dof_solver, mesh)
+    call intpl_dof_solver(dof_solver, dof, mesh)
+    
+    dt_arg = h/nts
+    dt_min = dt_CFL(dof_solver%psi, 0.25_dp)
+    
+    nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
+    write(6, *) "nts_adapted = ", nts_adapted
+    
+    
+    ! MAP diffusivity
+    ! Solve FK equation
+    nx = 5
+    ny = 5
+    !!$OMP PARALLEL DO PRIVATE(i)
+    do j = 1, ny
+      do i = 1, nx
+        call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+        
+        INDk = i + (j-1)*ny
+        Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), 0.05_dp /)
+        
+        call initialise_q_Gauss(q, Gauss_param, mesh)
+        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
+                                          trim(RunProfile), "/", trim(Td_char), "/q0"
+        call write(q, trim(output_q), 0.0_dp, INDk)
+        
+        call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts_adapted)
+        
+        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
+                                          trim(RunProfile), "/", trim(Td_char), "/q"
+        call write(q, trim(output_q), h, INDk)
+        
+        call deallocate(q)
+      end do
+    end do
+    !!$OMP END PARALLEL DO
+
+    call deallocate(dof_solver)
+    
+    
+    ! Davis diffusivity
+    !! Use Eulerian time-average
+    layer = 1
+    call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
+
+    ! Time-average + rescale wrt mesh
+    psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
+    psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
+    t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
+    ! call write(psi_EM, trim("./unittest/meanflow/psi_test"), t_avg, 0)
+    write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
+    
+    !N.B.: psi_EM%m = 512
+    call allocate(dof_EM, psi_EM%m/4+1, psi_EM%n/4+1, psi_EM%m/4+1, psi_EM%n/4+1)
+    
+    ! Filter out
+    dof_EM%psi%data = 0.0_dp
+    dof_EM%K11%data = 0.0_dp
+    dof_EM%K22%data = 0.0_dp
+    dof_EM%K12%data = 0.0_dp
+    
+    call sine_filter(dof_EM%psi%data(2:size(dof_EM%psi%data,1)-1, 2:size(dof_EM%psi%data,2)-1), &
+          psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,2)-1) )
+    call write_theta(dof_EM, trim("./unittest/meanflow/theta_EM_filtered"), sc, 0)
+    call deallocate(psi_EM)
+    
+    call read_theta(dof_Davis, "./LocalInf/KDavis_h32d", sc)
+    dof_Davis%K11%type_id = -2  ! Adhoc
+    dof_Davis%K12%type_id = -2  ! Adhoc
+    dof_Davis%K22%type_id = -2  ! Adhoc
+!     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
+    call print_info(dof_Davis)
+!     !! End: Use Eulerian time-average
+    
+    
+        
+    ! Timer
+    call stop(total_timer)
+    write(6, "(a)") "Total timers:"
+    call print(total_timer, "Total time on a node", prefix = "  ")
+    
+    ! Release memory
+    call deallocate(dof_Davis)
+    call deallocate(dof_EM)
+    call deallocate(dof_inv)
+    call deallocate(dof)
+    call deallocate(IndFn)
+    call deallocate(jumps)
+    call deallocate(jumps_inv)
+    
+    write(6, "(a)") &
+    "! ----------- Passed unittest_inference_OMP ----------- !"
+
+  end subroutine unittest_validate_inference
+  
   subroutine unittest_optimisation_OMP()
     use omp_lib
-    type(jumpsdat), dimension(:), pointer :: jumps
-    type(jumpsdat), dimension(:), pointer :: jumps_inv
+    type(jumpsdat), dimension(:), allocatable :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
 !     real(kind=dp) :: T
 
@@ -1420,16 +1773,12 @@ contains
     integer :: canon_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
-    real(kind=dp), dimension(1) :: UniRV
-
-
     
     integer, parameter :: Td = 32
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
     character(len = 256) :: output_fld, Td_char, resol_param
-
     
     ! Optimisation
     integer :: k
@@ -1653,7 +2002,7 @@ contains
 
   subroutine unittest_FPsolver_INPUT()
       use omp_lib
-    type(jumpsdat), dimension(:), pointer :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
     real(kind=dp) :: T
 
@@ -1902,7 +2251,7 @@ contains
   
   subroutine unittest_TG_instability()
     use omp_lib
-    type(jumpsdat), dimension(:), pointer :: jumps
+    type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
 
     integer :: m, n, cell, m_solver, m_Ind, n_Ind
@@ -1942,7 +2291,7 @@ contains
     m = 1
     n = 1
     ! m_solver: solver grid
-    m_solver = 256
+    m_solver = 128
     ! m_Ind, n_Ind: indicator functions
     m_Ind = 1
     n_Ind = m_Ind
@@ -1980,7 +2329,7 @@ contains
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
 
     ! Calculate nts = number of timesteps needed in solving FP
-    dt = 0.005_dp*3600.0_dp  ! 3 hours, in seconds
+    dt = 0.01_dp*3600.0_dp  ! 3 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
 
     ! Print info to screen
@@ -1994,10 +2343,11 @@ contains
     
     
     ! Look for a MLE by random walk
-    wavenumber = 32
+    wavenumber = 16
     
     a16_old = 2.0_dp*L *sc
-    kappa_old = 0.02_dp * L *sc/100.0_dp
+    kappa_old = 100.0_dp * L *sc/100.0_dp
+    kappa_old = 1.0_dp * L *sc/100.0_dp
     
 !     call set(dof_solver%psi, 0.0_dp)
 !     call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
@@ -2066,6 +2416,10 @@ contains
     do i = 1, nts
       call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
       call write(q, trim(output_q), (h/sc)/nts*i, i)
+      if (mod(i, nts/10) .eq. 0) then
+        write(6, *) i, " out of ", nts
+        flush(6)
+      end if
     end do
     
     call deallocate(q)
@@ -2110,7 +2464,7 @@ contains
   end subroutine unittest_TG_instability
   
   real(kind=dp) function eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-    type(jumpsdat), dimension(:), pointer, intent(in) :: jumps
+    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
     type(meshdat), intent(in) :: mesh
     type(dofdat), intent(in) :: dof_solver
     real(kind=dp), intent(in) :: h

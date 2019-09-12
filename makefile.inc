@@ -8,6 +8,7 @@ FCFLAGS += -openmp
 #FCFLAGS += -I$(PWD)/lib
 #FCFLAGS += -ffree-line-length-none -fdefault-real-8 -fdefault-double-8 -std=f2003 -Wall
 #FCFLAGS += -O3 -ffast-math -march=native -DNDEBUG
+#FCFLAGS += -fopenmp
 #FCFLAGS += -g
 
 
@@ -22,3 +23,4 @@ LDFLAGS += -llapack -lblas -lfftw3 -L$(PWD)/lib
 
 # REMARK:
 # I put only symbolic links in the folder './lib' only
+
