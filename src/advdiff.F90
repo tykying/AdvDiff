@@ -1284,14 +1284,14 @@ contains
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     
     integer, parameter :: ntune = 1
-    integer, dimension(:, :), allocatable :: accept_counter
+    integer, dimension(:,:), allocatable :: accept_counter
     real(kind=dp), dimension(:), allocatable :: canon_SSD
     
     integer :: canon_id
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
 
-    integer, parameter :: Td = 80
+    integer, parameter :: Td = 32
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !      character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
@@ -1404,7 +1404,7 @@ contains
 !     call print_info(jumps, mesh)
     
 !   likelihood for each indicator function
-    allocate(accept_counter(IndFn%nIND, ntune))
+    allocate(accept_counter(dof%ndof, ntune))
     call allocate(canon_SSD, dof)
     
     ! MCMC
@@ -1496,8 +1496,8 @@ contains
     
     ! Write MAP
     call write_theta(dof_MAP, trim(output_fld)//"theta_sigma", sc, -1)
-!     call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
-!     call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
+    call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
+    call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
 
     ! Release memory
     ! MH

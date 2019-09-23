@@ -1,15 +1,15 @@
 FC = ifort
 
-FCFLAGS += -I$(PWD)/lib
-FCFLAGS += -Ofast -xHost -ipo -finline-functions
-FCFLAGS += -openmp
-
-#FC = gfortran
 #FCFLAGS += -I$(PWD)/lib
-#FCFLAGS += -ffree-line-length-none -fdefault-real-8 -fdefault-double-8 -std=f2003 -Wall
-#FCFLAGS += -O3 -ffast-math -march=native -DNDEBUG
+#FCFLAGS += -Ofast -xHost -ipo -finline-functions
+#FCFLAGS += -openmp
+
+FC = gfortran
+FCFLAGS += -I$(PWD)/lib
+FCFLAGS += -ffree-line-length-none -fdefault-real-8 -fdefault-double-8 -std=f2003 -Wall
+FCFLAGS += -O3 -ffast-math -march=native -DNDEBUG
 #FCFLAGS += -fopenmp
-#FCFLAGS += -g
+FCFLAGS += -g
 
 
 
