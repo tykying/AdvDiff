@@ -3,6 +3,8 @@ import sys
 data_folder = './unittest/q64/TTG_sinusoidal/'
 data_folder = './unittest/q64/QGM2_L1/'
 data_folder = './unittest/cellular/'
+data_folder = './unittest/cellular/'
+data_folder = './unittest/validation/N4096_D256_I256/QGM2_L1_NPART2704/h32d/steps/'
 #data_folder = './unittest/meanflow/'
 # sys.path.insert(0, '/home/s1046972/opt/qgm2/python')
 
@@ -61,7 +63,7 @@ def animate_full(ts):
   axarr[1].set_aspect('equal')
 
 #ani = FuncAnimation(fig, animate_full, frames=range(0, 256+1, 8)) #, blit=True)
-ani = FuncAnimation(fig, animate_full, frames=range(0, 2400+1, 12)) #, blit=True)
+ani = FuncAnimation(fig, animate_full, frames=range(0, 2400+1, 1)) #, blit=True)
 #animate_full(0)
 plt.show()
 

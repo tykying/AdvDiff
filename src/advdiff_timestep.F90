@@ -210,16 +210,16 @@ contains
     real(kind=dp), intent(in) :: dt
     
     integer :: i, j
-    real(kind=dp) :: tmp
       
     ! LeVeque p119
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 1, size(F, 2)
       do i = 2, size(F, 1)-1
-!         if (dabs(dqx(i,j) .gt. 1D-16) then   !! Strange behavior with valgrind: with this line on it thinks there is a leak
+        !! Strange behavior with valgrind: with the `if' on it thinks there is a leak
+        if (dabs(dqx(i,j)) .gt. 1D-16) then
           F(i,j) = F(i,j) + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) &
                    * philim(dqx(i-lu_sgn(i,j), j)/dqx(i,j)) *dqx(i,j)
-!         end if
+        end if
       end do
     end do
 
@@ -238,10 +238,10 @@ contains
     !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
     do j = 2, size(G, 2)-1
       do i = 1, size(G, 1)
-!         if (dabs(dqy(i,j)) .gt. 1D-16) then
+        if (dabs(dqy(i,j)) .gt. 1D-16) then
           G(i,j) = G(i,j) + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) &
                 * philim(dqy(i, j-lv_sgn(i,j))/dqy(i,j)) *dqy(i,j)
-!         end if
+        end if
       end do
     end do
 

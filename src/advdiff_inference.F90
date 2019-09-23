@@ -139,8 +139,8 @@ contains
     
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-!    real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
+!    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+    real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Irrelevant
     
     if (present(sc)) then
@@ -268,7 +268,7 @@ contains
     integer :: k_i, i, j, gl
     real(kind=dp) :: x, y, x0, y0, Sigma0
     real(kind=dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
+    real(kind=dp) :: tmp
     gl = q%glayer
     
     x0 = Gauss_param(1)
@@ -280,8 +280,14 @@ contains
         x = fld_x(i, mesh%m, 2)
         y = fld_x(j, mesh%n, 2)
         
-        q%data(i+gl,j+gl) = dexp(-0.5_dp*((x-x0)**2+(y-y0)**2)/Sigma0**2) &
+        tmp = dexp(-0.5_dp*((x-x0)**2+(y-y0)**2)/Sigma0**2) &
                             /(2.0_dp*Pi*Sigma0**2)
+        
+        if (dabs(tmp) .gt. 1D-16) then
+          q%data(i+gl,j+gl) = tmp
+        else
+          q%data(i+gl,j+gl) = 0.0_dp
+        end if
       end do
     end do
     
@@ -513,8 +519,8 @@ contains
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Layer 1
-!    real(kind=dp), parameter :: psi_scale = 10.0_dp*1000.0_dp  ! Layer 2
+!    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Layer 1
+    real(kind=dp), parameter :: psi_scale = 10.0_dp*1000.0_dp  ! Layer 2
     
     integer :: k, list_i, list_f
     

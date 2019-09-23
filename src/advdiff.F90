@@ -28,8 +28,8 @@ contains
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    !call unittest_inference_OMP()
-    call unittest_validate_inference()
+    call unittest_inference_OMP()
+    !call unittest_validate_inference()
     !call unittest_optimisation_OMP()
     !call unittest_TG_instability()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
@@ -1291,11 +1291,11 @@ contains
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
 
-    integer, parameter :: Td = 32
+    integer, parameter :: Td = 80
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+!      character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-!    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
+    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
@@ -1317,20 +1317,12 @@ contains
     integer :: restart_ind = 0
     
     ! m, n: DOF/control
-    m = 20
-    n = 20
-    ! m_solver: solver grid
-    m_solver = 80
-    ! m_Ind, n_Ind: indicator functions
-    m_Ind = 20
-    n_Ind = m_Ind
-    
-    m = 8
-    n = 8
+    m = 16
+    n = 16
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
-    m_Ind = 8
+    m_Ind = 16
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -1350,7 +1342,7 @@ contains
       call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
       write(6, *) "After loading dof: sc = ",sc
     else
-      call allocate(dof, m-1, n-1, m/2+1, n/2+1)
+      call allocate(dof, m-1, n-1, m+1, n+1)
       call init_dof(dof, sc)
     end if
     
@@ -1398,9 +1390,9 @@ contains
     ! Calculate nts = number of timesteps needed in solving FP
     !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
-    dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    dt = 12.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
 
     ! Print info to screen
@@ -1441,7 +1433,6 @@ contains
     
     ! Generate random numbers
     niter = 400
-    niter = 1
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     call randn(stdnRV)
@@ -1453,8 +1444,7 @@ contains
     
     do iter = 1, niter
       ! In each iteration loop over all cells
-!       do canon_id = 1, dof%ndof
-      do canon_id = 1, 2
+      do canon_id = 1, dof%ndof
         RV_ind = (iter-1)*dof%ndof + canon_id
         
         ! Initialise K_prop
@@ -1506,8 +1496,8 @@ contains
     
     ! Write MAP
     call write_theta(dof_MAP, trim(output_fld)//"theta_sigma", sc, -1)
-    call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
-    call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
+!     call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
+!     call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
 
     ! Release memory
     ! MH
@@ -1531,6 +1521,30 @@ contains
 
   end subroutine unittest_inference_OMP
   
+  subroutine pwc_intpl(rfld, fld)
+    real(kind=dp), dimension(:,:), intent(inout) :: rfld
+    real(kind=dp), dimension(:,:), intent(in) :: fld
+    
+    integer :: i_reflv, j_reflv, i_mesh, j_mesh
+    integer :: i, j, i_lv, j_lv
+    
+    i_reflv = size(rfld, 1)/size(fld, 1)
+    j_reflv = size(rfld, 2)/size(fld, 2)
+    
+    do j = 1, size(fld, 2)
+      do i = 1, size(fld, 1)
+        do j_lv = 1, j_reflv
+          do i_lv = 1, i_reflv
+            i_mesh = i_reflv*(i-1)+i_lv
+            j_mesh = j_reflv*(j-1)+j_lv
+            rfld(i_mesh, j_mesh) = fld(i, j)
+          end do
+        end do
+      end do
+    end do
+    
+  end subroutine pwc_intpl
+  
   subroutine unittest_validate_inference()
     use omp_lib
     type(jumpsdat), dimension(:), allocatable :: jumps
@@ -1552,12 +1566,14 @@ contains
     
     integer, parameter :: ntune = 1
 
-    integer, parameter :: Td = 32
+    integer, parameter :: Td = 64
+    integer, parameter :: layer = 2
+    
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
-!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-!    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
-    character(len = 256) :: output_fld, Td_char, resol_param
+!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
+!    character(len=*), parameter :: RunProfile = "QGM2_L2_NPART676"
+    character(len=256) :: RunProfile
+    character(len=256) :: output_fld, Td_char, resol_param
 
     ! Timer
     type(timer), save :: total_timer
@@ -1565,10 +1581,11 @@ contains
     ! Use Eulerian time-average
     type(field) :: psi_EM
     real(kind=dp) :: t_avg
-    integer :: layer
+    integer :: nEM
+    character(len=256) :: KDavis_fld
     ! Use Eulerian time-average
     
-    integer :: restart_ind = 100
+    integer, parameter :: restart_ind = -1
     
     integer :: INDk, nts_adapted
 
@@ -1577,7 +1594,10 @@ contains
     type(field) :: q
     character(len = 256) ::output_q
     real(kind=dp), dimension(3) :: Gauss_param    !=(mean_x, mean_y, sigma)
+    real(kind=dp), parameter :: Gauss_sigma = 1.0_dp/32.0_dp
     integer :: i, j, nx, ny
+    
+    write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
     
     ! m, n: DOF/control
     m = 16
@@ -1593,18 +1613,18 @@ contains
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
-    m_solver = 64
+    m_solver = 64*4
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call read_theta(dof, trim(output_fld)//"theta_canon", sc, restart_ind)
+    call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
 !     call allocate(dof, m-1, n-1, m/2+1, n/2+1)
 !     call init_dof(dof, sc)
     
     ! Read trajectory
-    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
+    call read(traj, "./trajdat/"//trim(RunProfile)//"/"//trim(Td_char))
     
     ! Ensure the positions are normalised
     if (.not. check_normalised_pos(traj)) then
@@ -1622,13 +1642,15 @@ contains
     
     ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
-
+    
     ! Calculate nts = number of timesteps needed in solving FP
+    !dt = 0.375_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
-    dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    !dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     !dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
+    dt = 12.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
     
     ! Alternative
@@ -1664,15 +1686,14 @@ contains
     
     ! MAP diffusivity
     ! Solve FK equation
-    nx = 5
-    ny = 5
-    !!$OMP PARALLEL DO PRIVATE(i)
+    nx = 6
+    ny = 6
     do j = 1, ny
       do i = 1, nx
         call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
         
         INDk = i + (j-1)*ny
-        Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), 0.05_dp /)
+        Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
         
         call initialise_q_Gauss(q, Gauss_param, mesh)
         write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
@@ -1688,14 +1709,12 @@ contains
         call deallocate(q)
       end do
     end do
-    !!$OMP END PARALLEL DO
 
     call deallocate(dof_solver)
     
     
     ! Davis diffusivity
     !! Use Eulerian time-average
-    layer = 1
     call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
 
     ! Time-average + rescale wrt mesh
@@ -1706,25 +1725,72 @@ contains
     write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
     
     !N.B.: psi_EM%m = 512
-    call allocate(dof_EM, psi_EM%m/4+1, psi_EM%n/4+1, psi_EM%m/4+1, psi_EM%n/4+1)
+    nEM = m_solver
+    call allocate(dof_EM, nEM+1, nEM+1, nEM+1, nEM+1)
     
     ! Filter out
     dof_EM%psi%data = 0.0_dp
-    dof_EM%K11%data = 0.0_dp
-    dof_EM%K22%data = 0.0_dp
-    dof_EM%K12%data = 0.0_dp
-    
     call sine_filter(dof_EM%psi%data(2:size(dof_EM%psi%data,1)-1, 2:size(dof_EM%psi%data,2)-1), &
           psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,2)-1) )
-    call write_theta(dof_EM, trim("./unittest/meanflow/theta_EM_filtered"), sc, 0)
     call deallocate(psi_EM)
     
-    call read_theta(dof_Davis, "./LocalInf/KDavis_h32d", sc)
+    write(KDavis_fld, "(a,i0,a,i0,a)") "KDavis_L",layer,"_h",Td, "d"
+    call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
     dof_Davis%K11%type_id = -2  ! Adhoc
     dof_Davis%K12%type_id = -2  ! Adhoc
     dof_Davis%K22%type_id = -2  ! Adhoc
-!     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
+
     call print_info(dof_Davis)
+!     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
+
+    
+    call pwc_intpl(dof_EM%K11%data(1:nEM,1:nEM), dof_Davis%K11%data)
+    call pwc_intpl(dof_EM%K22%data(1:nEM,1:nEM), dof_Davis%K22%data)
+    call pwc_intpl(dof_EM%K12%data(1:nEM,1:nEM), dof_Davis%K12%data)
+    
+    ! Ad-hoc way
+    dof_EM%K11%data(nEM+1,:) = dof_EM%K11%data(nEM,:)
+    dof_EM%K22%data(nEM+1,:) = dof_EM%K22%data(nEM,:)
+    dof_EM%K12%data(nEM+1,:) = dof_EM%K12%data(nEM,:)
+    dof_EM%K11%data(:,nEM+1) = dof_EM%K11%data(:,nEM)
+    dof_EM%K22%data(:,nEM+1) = dof_EM%K22%data(:,nEM)
+    dof_EM%K12%data(:,nEM+1) = dof_EM%K12%data(:,nEM)
+    
+    dof_EM%psi%type_id = 1  ! Adhoc
+    dof_EM%K11%type_id = 1  ! Adhoc
+    dof_EM%K12%type_id = 1  ! Adhoc
+    dof_EM%K22%type_id = 1  ! Adhoc
+    
+!     call write_theta(dof_EM, trim("./unittest/meanflow/theta_EM_filtered"), sc, 0)
+    
+    
+    dt_arg = h/nts
+    dt_min = dt_CFL(dof_EM%psi, 0.25_dp)
+    
+    nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
+    write(6, *) "nts_adapted = ", nts_adapted
+    
+    do j = 1, ny
+      do i = 1, nx
+        call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+        
+        INDk = i + (j-1)*ny
+        Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
+        
+        call initialise_q_Gauss(q, Gauss_param, mesh)
+        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
+                                          trim(RunProfile), "/", trim(Td_char), "/Davis0"
+        call write(q, trim(output_q), 0.0_dp, INDk)
+        
+        call advdiff_q(q, dof_EM%psi, dof_EM%K11, dof_EM%K22, dof_EM%K12, h, nts_adapted)
+        
+        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
+                                          trim(RunProfile), "/", trim(Td_char), "/Davis"
+        call write(q, trim(output_q), h, INDk)
+        
+        call deallocate(q)
+      end do
+    end do
 !     !! End: Use Eulerian time-average
     
     
