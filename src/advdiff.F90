@@ -1291,11 +1291,13 @@ contains
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
 
-    integer, parameter :: Td = 32
+    integer, parameter :: Td = 64
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !      character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-    character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
+!     character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
+    integer, parameter :: layer = 1
+    character(len = 128) :: RunProfile
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Timer
@@ -1304,7 +1306,6 @@ contains
     ! Use Eulerian time-average
     type(field) :: psi_EM
     real(kind=dp) :: t_avg
-    integer :: layer
     ! Use Eulerian time-average
     
     ! Prior
@@ -1314,7 +1315,7 @@ contains
     real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
     integer :: RV_ind
     
-    integer :: restart_ind = 0
+    integer :: restart_ind = 23
     
     ! m, n: DOF/control
     m = 16
@@ -1324,6 +1325,8 @@ contains
     ! m_Ind, n_Ind: indicator functions
     m_Ind = 16
     n_Ind = m_Ind
+    
+    write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
@@ -1368,7 +1371,7 @@ contains
     call allocate(prior_param, sc)
     
     ! Read trajectory
-    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
+    call read(traj, "./trajdat/"//trim(RunProfile)//"/"//trim(Td_char))
 
     ! Ensure the positions are normalised
     if (.not. check_normalised_pos(traj)) then
@@ -1426,17 +1429,17 @@ contains
     call set(dof_MAP, dof)
 
     ind = restart_ind
-    write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof_old%SlogPost
+    write(6, "(i0, a, "//dp_chr//")") 10*ind, "-th step: logPost = ", dof_old%SlogPost
     FLUSH(6)
     
-     call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
+    call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
     
     ! Generate random numbers
     niter = 400
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
-    call randn(stdnRV)
-    call randu(UniRV)
+    call randn(stdnRV, (/ 1989, 6, m_solver, Td /))
+    call randu(UniRV, (/ nts, n, 11, 28 /))
     
     ! Timer
     call reset(total_timer)
@@ -1613,7 +1616,7 @@ contains
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
-    m_solver = 64*4
+    m_solver = 64
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     

@@ -139,7 +139,7 @@ contains
     
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-!    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
+!    real(kind=dp), parameter :: kappa_scale = 10000.0_dp            ! Layer 1
     real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Irrelevant
     
@@ -519,7 +519,7 @@ contains
     real(kind=dp) :: ssc
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-!    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Layer 1
+!     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Layer 1
     real(kind=dp), parameter :: psi_scale = 10.0_dp*1000.0_dp  ! Layer 2
     
     integer :: k, list_i, list_f
