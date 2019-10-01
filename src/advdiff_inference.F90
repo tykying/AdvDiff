@@ -196,7 +196,7 @@ contains
     call intpl_dof_solver(dof_solver, dof, mesh)
     
     !! "!$OMP PARALLEL DO num_threads(32)"
-    !$OMP PARALLEL DO
+    !$OMP PARALLEL DO 
     do INDk = 1, IndFn%nIND
       loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts)
     end do
@@ -818,11 +818,9 @@ contains
     call intpl_dof_solver(dof_solver, dof, mesh)
     
     dt_arg = h/nts
-    dt_min = dt_CFL(dof_solver%psi, 0.25_dp)
+    dt_min = dt_CFL(dof_solver%psi, 0.20_dp)
     
     nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
-    
-!     write(6, *) nts_adapted, nts
     
     ! log-Prior
     logPrior =  evaluate_logPrior(dof_solver, prior_param)
@@ -834,7 +832,7 @@ contains
       !! Control number of thread = 32 by 
       !! "!$OMP PARALLEL DO num_threads(32)"
 
-      !$OMP PARALLEL DO
+      !$OMP PARALLEL DO num_threads(32)
       do INDk = 1, IndFn%nIND
         loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts_adapted)
       end do
@@ -851,6 +849,55 @@ contains
     
   end function evaluate_logPost_OMP
   
+  real(kind=dp) function evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+    type(priordat), intent(in) :: prior_param
+    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
+    type(IndFndat), intent(in) :: IndFn
+    type(meshdat), intent(in) :: mesh
+    type(dofdat), intent(in) :: dof
+    real(kind=dp), intent(in) :: h
+    integer, intent(in) :: nts
+
+    integer :: INDk, nts_adapted
+
+    type(dofdat) :: dof_solver  ! Refined dof for solver
+    real(kind=dp), dimension(:), allocatable :: loglik
+    real(kind=dp) :: logPrior, dt_min, dt_arg
+    
+    call allocate(dof_solver, mesh)
+    call intpl_dof_solver(dof_solver, dof, mesh)
+    
+    dt_arg = h/nts
+    dt_min = dt_CFL(dof_solver%psi, 0.20_dp)
+    
+    nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
+    
+    ! log-Prior
+    logPrior =  evaluate_logPrior(dof_solver, prior_param)
+    
+    if (logPrior .gt. -1e-15) then
+      ! log-likelihood
+      allocate(loglik(IndFn%nIND))
+
+      !! Control number of thread = 32 by 
+      !! "!$OMP PARALLEL DO num_threads(32)"
+
+      !$OMP PARALLEL DO num_threads(32)
+      do INDk = 1, IndFn%nIND
+        loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts_adapted)
+      end do
+      !$OMP END PARALLEL DO
+    
+      evaluate_logPost_OMP = sum(loglik) + logPrior
+
+      deallocate(loglik)
+    else
+      evaluate_logPost_OMP = logPrior
+    end if
+    
+    call deallocate(dof_solver)
+    
+  end function evaluate_logPost_OMP
   
   subroutine propose_dof_canon(dof, canon_SSD, canon_id, Z_rv)
     type(dofdat), intent(inout) :: dof

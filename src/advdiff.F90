@@ -1291,11 +1291,7 @@ contains
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
 
-    integer, parameter :: Td = 64
-!    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-!      character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
-!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART676"
-!     character(len = *), parameter :: RunProfile = "QGM2_L2_NPART676"
+    integer, parameter :: Td = 32
     integer, parameter :: layer = 1
     character(len = 128) :: RunProfile
     character(len = 256) :: output_fld, Td_char, resol_param
@@ -1315,7 +1311,7 @@ contains
     real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
     integer :: RV_ind
     
-    integer :: restart_ind = 23
+    integer :: restart_ind = 0
     
     ! m, n: DOF/control
     m = 16
@@ -1327,7 +1323,18 @@ contains
     n_Ind = m_Ind
     
     write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
+    write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART2704"
     
+!     ! m, n: DOF/control
+!     m = 8
+!     n = 8
+!     ! m_solver: solver grid
+!     m_solver = 64
+!     ! m_Ind, n_Ind: indicator functions
+!     m_Ind = 8
+!     n_Ind = m_Ind
+!     write(RunProfile, "(a)") "TTG_sinusoidal"
+
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
@@ -1595,10 +1602,10 @@ contains
     type(dofdat) :: dof_solver  ! Refined dof for solver
     real(kind=dp) :: dt_min, dt_arg
     type(field) :: q
-    character(len = 256) ::output_q
+    character(len = 256) ::output_q, suffix
     real(kind=dp), dimension(3) :: Gauss_param    !=(mean_x, mean_y, sigma)
     real(kind=dp), parameter :: Gauss_sigma = 1.0_dp/32.0_dp
-    integer :: i, j, nx, ny
+    integer :: i, j, nx, ny, DavisID
     
     write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
     
@@ -1616,7 +1623,7 @@ contains
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
-    m_solver = 64
+    m_solver = 128
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     
@@ -1681,7 +1688,7 @@ contains
     call intpl_dof_solver(dof_solver, dof, mesh)
     
     dt_arg = h/nts
-    dt_min = dt_CFL(dof_solver%psi, 0.25_dp)
+    dt_min = dt_CFL(dof_solver%psi, 0.1_dp)
     
     nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
     write(6, *) "nts_adapted = ", nts_adapted
@@ -1703,7 +1710,7 @@ contains
                                           trim(RunProfile), "/", trim(Td_char), "/q0"
         call write(q, trim(output_q), 0.0_dp, INDk)
         
-        call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts_adapted)
+        call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, 2*nts_adapted)
         
         write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
                                           trim(RunProfile), "/", trim(Td_char), "/q"
@@ -1712,6 +1719,9 @@ contains
         call deallocate(q)
       end do
     end do
+
+    ! Write theta_MAP
+    call write_theta(dof_solver, trim(output_q)//"theta_MAP", sc)
 
     call deallocate(dof_solver)
     
@@ -1738,65 +1748,75 @@ contains
     call deallocate(psi_EM)
     
     write(KDavis_fld, "(a,i0,a,i0,a)") "KDavis_L",layer,"_h",Td, "d"
-    call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
-    dof_Davis%K11%type_id = -2  ! Adhoc
-    dof_Davis%K12%type_id = -2  ! Adhoc
-    dof_Davis%K22%type_id = -2  ! Adhoc
-
-    call print_info(dof_Davis)
-!     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
-
-    
-    call pwc_intpl(dof_EM%K11%data(1:nEM,1:nEM), dof_Davis%K11%data)
-    call pwc_intpl(dof_EM%K22%data(1:nEM,1:nEM), dof_Davis%K22%data)
-    call pwc_intpl(dof_EM%K12%data(1:nEM,1:nEM), dof_Davis%K12%data)
-    
-    ! Ad-hoc way
-    dof_EM%K11%data(nEM+1,:) = dof_EM%K11%data(nEM,:)
-    dof_EM%K22%data(nEM+1,:) = dof_EM%K22%data(nEM,:)
-    dof_EM%K12%data(nEM+1,:) = dof_EM%K12%data(nEM,:)
-    dof_EM%K11%data(:,nEM+1) = dof_EM%K11%data(:,nEM)
-    dof_EM%K22%data(:,nEM+1) = dof_EM%K22%data(:,nEM)
-    dof_EM%K12%data(:,nEM+1) = dof_EM%K12%data(:,nEM)
     
     dof_EM%psi%type_id = 1  ! Adhoc
     dof_EM%K11%type_id = 1  ! Adhoc
     dof_EM%K12%type_id = 1  ! Adhoc
     dof_EM%K22%type_id = 1  ! Adhoc
-    
-!     call write_theta(dof_EM, trim("./unittest/meanflow/theta_EM_filtered"), sc, 0)
-    
-    
-    dt_arg = h/nts
-    dt_min = dt_CFL(dof_EM%psi, 0.25_dp)
-    
-    nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
-    write(6, *) "nts_adapted = ", nts_adapted
-    
-    do j = 1, ny
-      do i = 1, nx
-        call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
-        
-        INDk = i + (j-1)*ny
-        Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
-        
-        call initialise_q_Gauss(q, Gauss_param, mesh)
-        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/Davis0"
-        call write(q, trim(output_q), 0.0_dp, INDk)
-        
-        call advdiff_q(q, dof_EM%psi, dof_EM%K11, dof_EM%K22, dof_EM%K12, h, nts_adapted)
-        
-        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/Davis"
-        call write(q, trim(output_q), h, INDk)
-        
-        call deallocate(q)
+      
+    do DavisID = 1, 2
+      if (DavisID .eq. 1) then
+        write(suffix, "(a)") "_676"
+        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/production/DavisDiffusivity_ScarceData/postprocess_output/out/"//trim(KDavis_fld), sc)
+      else
+        write(suffix, "(a)") "_40000"
+        call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
+      end if
+
+      dof_Davis%K11%type_id = -2  ! Adhoc
+      dof_Davis%K12%type_id = -2  ! Adhoc
+      dof_Davis%K22%type_id = -2  ! Adhoc
+
+      call print_info(dof_Davis)
+  !     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
+
+      call pwc_intpl(dof_EM%K11%data(1:nEM,1:nEM), dof_Davis%K11%data)
+      call pwc_intpl(dof_EM%K22%data(1:nEM,1:nEM), dof_Davis%K22%data)
+      call pwc_intpl(dof_EM%K12%data(1:nEM,1:nEM), dof_Davis%K12%data)
+      
+      ! Ad-hoc way
+      dof_EM%K11%data(nEM+1,:) = dof_EM%K11%data(nEM,:)
+      dof_EM%K22%data(nEM+1,:) = dof_EM%K22%data(nEM,:)
+      dof_EM%K12%data(nEM+1,:) = dof_EM%K12%data(nEM,:)
+      dof_EM%K11%data(:,nEM+1) = dof_EM%K11%data(:,nEM)
+      dof_EM%K22%data(:,nEM+1) = dof_EM%K22%data(:,nEM)
+      dof_EM%K12%data(:,nEM+1) = dof_EM%K12%data(:,nEM)
+      
+      dt_arg = h/nts
+      dt_min = dt_CFL(dof_EM%psi, 0.1_dp)
+      
+      nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
+      write(6, *) "nts_adapted = ", nts_adapted
+      
+      write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
+                                          trim(RunProfile), "/", trim(Td_char), "/"
+      
+      do j = 1, ny
+        do i = 1, nx
+          call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+          
+          INDk = i + (j-1)*ny
+          Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
+          
+          call initialise_q_Gauss(q, Gauss_param, mesh)
+          call advdiff_q(q, dof_EM%psi, dof_EM%K11, dof_EM%K22, dof_EM%K12, h, nts_adapted)
+          
+          call write(q, trim(output_q)//"Davis"//trim(suffix), h, INDk)
+          
+          call deallocate(q)
+        end do
       end do
+      
+    ! Write theta_MAP
+      if (DavisID .eq. 1) then
+        call write_theta(dof_EM, trim(output_q)//"theta_Davis", sc, 676)
+      else
+        call write_theta(dof_EM, trim(output_q)//"theta_Davis", sc, 40000)
+      end if
+      
+      call deallocate(dof_Davis)
     end do
 !     !! End: Use Eulerian time-average
-    
-    
         
     ! Timer
     call stop(total_timer)
@@ -1804,7 +1824,6 @@ contains
     call print(total_timer, "Total time on a node", prefix = "  ")
     
     ! Release memory
-    call deallocate(dof_Davis)
     call deallocate(dof_EM)
     call deallocate(dof_inv)
     call deallocate(dof)

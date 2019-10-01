@@ -393,7 +393,7 @@ contains
 
   end subroutine imposeBC_q
   
-    ! Consider the ghost point
+  ! Consider the ghost point
   subroutine eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e)
     ! 5-point stencil: ignore off diagonal terms
     ! Wrong BC??
