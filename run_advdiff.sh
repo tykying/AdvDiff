@@ -17,6 +17,7 @@ make clean
 make
 
 date
+SECONDS=0
 #nohup ./advdiff > mon_advdiff_bilinear_h32d_prior2_L2.txt &
 #nohup ./advdiff > mon_advdiff_bilinear_h32d_canon_lmt.txt &
 #nohup ./advdiff > mon_advdiff_TTG.txt &
@@ -24,11 +25,13 @@ date
 #nohup ./advdiff > mon_advdiff_h32d_unstructured2.txt &
 #nohup ./advdiff > mon_advdiff_h32d_highres80.txt &
 #nohup ./advdiff > mon_advdiff_h64d_L2_sigma.txt &
-nohup ./advdiff > mon_advdiff_h32d_L1_sigma.txt &
+#nohup ./advdiff > mon_advdiff_h32d_L1_sigma.txt &
 #nohup ./advdiff > LW_convtest2.txt &
 #nohup ./advdiff > MC_convtest2.txt &
 #./advdiff
-
+mpirun -np 16 ./advdiff
+elapsedseconds=$SECONDS
+echo Time taken = $elapsedseconds
 date 
 
 #make clean

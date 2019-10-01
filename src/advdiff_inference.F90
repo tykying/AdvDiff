@@ -35,6 +35,7 @@ module advdiff_inference
   type IndFndat
     integer :: m_Ind, n_Ind
     integer :: NInd
+    integer, dimension(:), allocatable :: INDk_list
   end type IndFndat
   
   type priordat
@@ -60,6 +61,33 @@ module advdiff_inference
   end interface print_info
 
 contains
+  ! MPI
+  pure integer function count_NInd(my_id, num_procs, NInd)
+    ! Input: my_id
+    ! Output: number of IndFunc attributed to my_id
+    integer, intent(in) :: my_id, num_procs, NInd
+
+    integer :: IndFunc
+
+    count_NInd = 0
+    do IndFunc = 1, NInd
+      if (get_partition(IndFunc, num_procs) .eq. my_id) count_NInd = count_NInd + 1
+    end do
+
+  end function count_NInd
+
+  pure integer function get_partition(k, num_procs)
+    ! Input: index of a indicator function k
+    !        total number of nodes = num_procs
+    ! Output: if (my_id == output) then do the job
+    integer, intent(in) :: k, num_procs
+
+    ! Mod partition
+    get_partition = mod(k, num_procs)
+
+  end function get_partition
+    
+  ! Non-MPI below
   subroutine allocate_dof(dof, m_psi, n_psi, m_K, n_K)
     type(dofdat), intent(inout) :: dof
     integer, intent(in) :: m_psi, n_psi, m_K, n_K
@@ -108,19 +136,58 @@ contains
 
   end subroutine deallocate_dof
   
-  subroutine allocate_IndFn(InfFn, m_Ind, n_Ind)
+  subroutine allocate_IndFn(InfFn, m_Ind, n_Ind, my_id, num_procs)
     type(IndFndat), intent(inout) :: InfFn
     integer, intent(in) :: m_Ind, n_Ind
+    integer, optional, intent(in) :: my_id, num_procs
+    
+    integer :: NInd_total
+    integer :: INDk, i
 
     ! Assume no overlapping
     InfFn%m_Ind = m_Ind
     InfFn%n_Ind = n_Ind
-    InfFn%NInd = InfFn%m_Ind * InfFn%n_Ind
+    NInd_total = m_Ind*n_Ind
+    
+    if (present(my_id) .and. present(num_procs)) then
+      ! Parallelise IndFn
+      InfFn%NInd = count_NInd(my_id, num_procs, NInd_total)
+      write(6, "(a,i0,a,i0)") "my_id = ", my_id, "; InfFn%NInd = ", InfFn%NInd
+
+      if (InfFn%NInd .gt. 0) then
+        allocate(InfFn%INDk_list(InfFn%NInd))
+        
+        i = 0
+        do INDk = 1, NInd_total
+          if (get_partition(INDk, num_procs) .eq. my_id) then
+            i = i + 1
+            InfFn%INDk_list(i) = INDk
+          end if
+        end do
+        
+        if (i .ne. InfFn%NInd) then
+          write(6, "(a,i0,i0)") "Inconsistent INDk_list: i, NInd = ", i, InfFn%NInd
+          stop
+        end if
+      else
+        allocate(InfFn%INDk_list(1))
+        InfFn%INDk_list(1) = 0.0_dp
+      end if
+    else
+      InfFn%NInd = NInd_total
+      allocate(InfFn%INDk_list(InfFn%NInd))
+      
+      do INDk = 1, InfFn%NInd
+        InfFn%INDk_list(INDk) = INDk
+      end do
+    end if
     
   end subroutine allocate_IndFn
   
   subroutine deallocate_IndFn(InfFn)
     type(IndFndat), intent(inout) :: InfFn
+    
+    deallocate(InfFn%INDk_list)
 
   end subroutine deallocate_IndFn
   
@@ -178,33 +245,6 @@ contains
       dof%canon(i) = dof_in%canon(i)
     end do
   end subroutine set_dof
-  
-  subroutine evaluate_loglik_OMP(loglik, jumps, IndFn, mesh, dof, h, nts)
-    real(kind=dp), dimension(:), intent(out) :: loglik
-    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
-    type(IndFndat), intent(in) :: IndFn
-    type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof
-    real(kind=dp), intent(in) :: h
-    integer, intent(in) :: nts
-
-    integer :: INDk
-
-    type(dofdat) :: dof_solver  ! Refined dof for solver
-    
-    call allocate(dof_solver, mesh)
-    call intpl_dof_solver(dof_solver, dof, mesh)
-    
-    !! "!$OMP PARALLEL DO num_threads(32)"
-    !$OMP PARALLEL DO 
-    do INDk = 1, IndFn%nIND
-      loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts)
-    end do
-    !$OMP END PARALLEL DO
-    
-    call deallocate(dof_solver)
-    
-  end subroutine evaluate_loglik_OMP
   
   subroutine INDk_to_klist(klist, INDk, IndFn, mesh)
     integer, dimension(:), allocatable, intent(out) :: klist
@@ -808,7 +848,7 @@ contains
     real(kind=dp), intent(in) :: h
     integer, intent(in) :: nts
 
-    integer :: INDk, nts_adapted
+    integer :: i, nts_adapted
 
     type(dofdat) :: dof_solver  ! Refined dof for solver
     real(kind=dp), dimension(:), allocatable :: loglik
@@ -828,63 +868,10 @@ contains
     if (logPrior .gt. -1e-15) then
       ! log-likelihood
       allocate(loglik(IndFn%nIND))
-
-      !! Control number of thread = 32 by 
-      !! "!$OMP PARALLEL DO num_threads(32)"
-
-      !$OMP PARALLEL DO num_threads(32)
-      do INDk = 1, IndFn%nIND
-        loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts_adapted)
-      end do
-      !$OMP END PARALLEL DO
-    
-      evaluate_logPost_OMP = sum(loglik) + logPrior
-
-      deallocate(loglik)
-    else
-      evaluate_logPost_OMP = logPrior
-    end if
-    
-    call deallocate(dof_solver)
-    
-  end function evaluate_logPost_OMP
-  
-  real(kind=dp) function evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-    type(priordat), intent(in) :: prior_param
-    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
-    type(IndFndat), intent(in) :: IndFn
-    type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof
-    real(kind=dp), intent(in) :: h
-    integer, intent(in) :: nts
-
-    integer :: INDk, nts_adapted
-
-    type(dofdat) :: dof_solver  ! Refined dof for solver
-    real(kind=dp), dimension(:), allocatable :: loglik
-    real(kind=dp) :: logPrior, dt_min, dt_arg
-    
-    call allocate(dof_solver, mesh)
-    call intpl_dof_solver(dof_solver, dof, mesh)
-    
-    dt_arg = h/nts
-    dt_min = dt_CFL(dof_solver%psi, 0.20_dp)
-    
-    nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
-    
-    ! log-Prior
-    logPrior =  evaluate_logPrior(dof_solver, prior_param)
-    
-    if (logPrior .gt. -1e-15) then
-      ! log-likelihood
-      allocate(loglik(IndFn%nIND))
-
-      !! Control number of thread = 32 by 
-      !! "!$OMP PARALLEL DO num_threads(32)"
-
-      !$OMP PARALLEL DO num_threads(32)
-      do INDk = 1, IndFn%nIND
-        loglik(INDk) = eval_INDk_loglik(INDk, jumps, IndFn, mesh, dof_solver, h, nts_adapted)
+      
+      !$OMP PARALLEL DO num_threads(16)
+      do i = 1, IndFn%nIND
+        loglik(i) = eval_INDk_loglik(IndFn%INDk_list(i), jumps, IndFn, mesh, dof_solver, h, nts_adapted)
       end do
       !$OMP END PARALLEL DO
     

@@ -28,7 +28,7 @@ contains
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    call unittest_inference_OMP()
+    call unittest_inference()
     !call unittest_validate_inference()
     !call unittest_optimisation_OMP()
     !call unittest_TG_instability()
@@ -1261,9 +1261,15 @@ contains
     write(6, "(a)") &
       "! ----------- Passed unittest_timer ----------- !"
   end subroutine unittest_timer
-  
-  subroutine unittest_inference_OMP()
+
+#define OMP0MPI1 1
+
+  subroutine unittest_inference()
+#if OMP0MPI1 == 0
     use omp_lib
+#elif OMP0MPI1 == 1
+    use mpi
+#endif
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
@@ -1312,10 +1318,21 @@ contains
     integer :: RV_ind
     
     integer :: restart_ind = 0
+
+    ! MPI
+    integer :: my_id, num_procs
+#if OMP0MPI1 == 1
+    integer :: ierr
+    real(kind=dp) :: SlogPost_local
+    real(kind=dp) :: SlogPost_global = 0.0_dp
+#endif
+
     
     ! m, n: DOF/control
     m = 16
     n = 16
+    m = 8
+    n = 8
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
@@ -1324,57 +1341,55 @@ contains
     
     write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
     write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART2704"
-    
-!     ! m, n: DOF/control
-!     m = 8
-!     n = 8
-!     ! m_solver: solver grid
-!     m_solver = 64
-!     ! m_Ind, n_Ind: indicator functions
-!     m_Ind = 8
-!     n_Ind = m_Ind
-!     write(RunProfile, "(a)") "TTG_sinusoidal"
 
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
-    write(6, "(a, a)") "Output path: ", trim(output_fld)
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
+#if OMP0MPI1 == 0
+    my_id = 0
+    num_procs = 1
+    
     call allocate(IndFn, m_Ind, n_Ind)
-   
+#elif OMP0MPI1 == 1
+    call MPI_INIT( ierr )
+    call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
+    call MPI_COMM_SIZE(MPI_COMM_WORLD, num_procs, ierr)
+    
+    call allocate(IndFn, m_Ind, n_Ind, my_id, num_procs)
+#endif
+    
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
 
     if (restart_ind .gt. 0) then
-      write(6, *) "Before loading dof: sc = ",sc
-      call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
-      write(6, *) "After loading dof: sc = ",sc
+      call read_theta(dof, trim(output_fld)//"theta_MPI", sc, restart_ind)
     else
       call allocate(dof, m-1, n-1, m+1, n+1)
       call init_dof(dof, sc)
     end if
     
-!     !! Use Eulerian time-average
-!     layer = 1
-!     call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
-!     
-!     ! Time-average + rescale wrt mesh
-!     psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
-!     psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
-!     t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
-!     ! call write(psi_EM, trim("./unittest/meanflow/psi_test"), t_avg, 0)
-!     write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
-!     
-!     ! Filter out
-!     call sine_filter(dof%psi%data, &
-!       psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,1)-1) )
-!     dof%ndof = 3*(dof%m_K*dof%n_K)
-!     !call write_theta(dof, trim("./unittest/meanflow/theta_EM"), sc, 0)
-!     call deallocate(psi_EM)
-!     !! End: Use Eulerian time-average
+#define EM_MEAN 0
+#if EM_MEAN == 1
+    !! Use Eulerian time-average
+    call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
     
+    ! Time-average + rescale wrt mesh
+    psi_EM%data = (psi_EM%data - psi_EM%data(1,1))/t_avg
+    psi_EM%data = psi_EM%data/(100.0_dp*real(psi_EM%m, kind=dp)) * real(mesh%m, kind=dp)  ! 100: from cm to m
+    t_avg =  t_avg/(psi_EM%m/(L*100.0_dp))/(3600.0_dp*24.0_dp*365.25_dp)
+    write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
+    
+    ! Filter out
+    call sine_filter(dof%psi%data, &
+      psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,1)-1) )
+    dof%ndof = 3*(dof%m_K*dof%n_K)
+    call deallocate(psi_EM)
+    !! End: Use Eulerian time-average
+#endif
+
     call allocate(prior_param, sc)
     
     ! Read trajectory
@@ -1398,19 +1413,20 @@ contains
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
 
     ! Calculate nts = number of timesteps needed in solving FP
-    !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    dt = 12.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    nts = int((h/sc)/dt)    ! 2 hours time step
+    dt = 12.0_dp*3600.0_dp  ! 12 hours, in seconds
+    nts = int((h/sc)/dt)    ! 12 hours time step
 
     ! Print info to screen
-    call print_info(mesh)
-    call print_info(dof)
-    call print_info(IndFn)
-    call print_info(h, nts, sc)
+    if (my_id .eq. (num_procs-1)) then
+      write(6, "(a, a)") "Output path: ", trim(output_fld)
+      call print_info(mesh)
+      call print_info(dof)
+      call print_info(IndFn)
+      call print_info(h, nts, sc)
 
+      flush(6)
+    end if
+    
 !     call print_info(jumps, mesh)
     
 !   likelihood for each indicator function
@@ -1430,19 +1446,36 @@ contains
     call reverse_dof_to_dof_inv(dof_inv, dof)
     
     ! Initialise
+    ind = restart_ind
+
+#if OMP0MPI1 == 0
     dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+#elif OMP0MPI1 == 1
+    SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+    if (my_id .eq. (num_procs-1)) SlogPost_global = 0.0_dp
+    
+    call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
+             num_procs-1, MPI_COMM_WORLD, ierr)
+    
+    if (my_id .eq. (num_procs-1)) then
+      dof%SlogPost = SlogPost_global
+    end if
+#endif
+
+    ! I/O
+    if (my_id .eq. (num_procs-1)) then
+      write(6, "(i0, a, "//dp_chr//")") 10*ind, "-th step: logPost = ", dof%SlogPost
+      flush(6)
+      
+      call write_theta(dof_old, trim(output_fld)//"theta_MPI", sc, ind)
+    end if
 
     call set(dof_old, dof)
     call set(dof_MAP, dof)
-
-    ind = restart_ind
-    write(6, "(i0, a, "//dp_chr//")") 10*ind, "-th step: logPost = ", dof_old%SlogPost
-    FLUSH(6)
-    
-    call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
     
     ! Generate random numbers
     niter = 400
+    niter = 1
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     call randn(stdnRV, (/ 1989, 6, m_solver, Td /))
@@ -1469,12 +1502,29 @@ contains
         call reverse_dof_to_dof_inv(dof_inv, dof)
         
         ! Evaluate likelihood
+#if OMP0MPI1 == 0
         dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-        
         ! Metropolis-Hastings
         alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
         
-        if (UniRV(RV_ind) < alphaUniRV) then
+#elif OMP0MPI1 == 1
+        SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+        if (my_id .eq. (num_procs-1)) SlogPost_global = 0.0_dp
+        
+        call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
+                num_procs-1, MPI_COMM_WORLD, ierr)
+        
+        if (my_id .eq. (num_procs-1)) then
+          dof%SlogPost = SlogPost_global
+          ! Metropolis-Hastings
+          alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
+        end if
+        
+        call MPI_Bcast(alphaUniRV, 1, MPI_DOUBLE_PRECISION, num_procs-1, MPI_COMM_WORLD, ierr)
+!         write(6, *) "my_id = ", my_id, "alphaUniRV = ", alphaUniRV
+#endif
+        
+        if (UniRV(RV_ind) .lt. alphaUniRV) then
           ! Accepted
           call set(dof_old, dof)
           dof_old%occurrence = 1
@@ -1485,30 +1535,37 @@ contains
         end if
         
         ! Record MAP
-        if (dof%SlogPost > dof_MAP%SlogPost) then
+        if (dof%SlogPost .gt. dof_MAP%SlogPost) then
           call set(dof_MAP, dof)
         end if
       end do
       
       ! I/O
-      if (mod(iter, 10) .eq. 0) then
+      if ((my_id .eq. (num_procs-1)) .and. (mod(iter, 10) .eq. 0)) then
         write(6, "(i0, a, "//dp_chr//")") restart_ind*10 + iter, "-th step: logPost = ", dof_old%SlogPost
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_sigma", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_MPI", sc, ind)
       end if
     end do
+    
+    
     ! Timer
     call stop(total_timer)
-    write(6, "(a)") "Total timers:"
-    call print(total_timer, "Total time on a node", prefix = "  ")
     
-    ! Write MAP
-    call write_theta(dof_MAP, trim(output_fld)//"theta_sigma", sc, -1)
-    call write_txt(accept_counter, trim(output_fld)//"theta_sigma_accept_counter")
-    call write_txt(canon_SSD, trim(output_fld)//"theta_sigma_canon_SSD")
-
+    ! I/O
+    if ((my_id .eq. (num_procs-1))) then
+      write(6, "(a, "//dp_chr//")")  "Final step: logPost = ", dof_old%SlogPost
+      write(6, "(a)") "Total timers:"
+      call print(total_timer, "Total time on a node", prefix = "  ")
+      
+      ! Write MAP
+      call write_theta(dof_MAP, trim(output_fld)//"theta_MPI", sc, -1)
+      call write_txt(accept_counter, trim(output_fld)//"theta_MPI_accept_counter")
+      call write_txt(canon_SSD, trim(output_fld)//"theta_MPI_canon_SSD")
+    end if
+    
     ! Release memory
     ! MH
     deallocate(stdnRV)
@@ -1527,9 +1584,9 @@ contains
     call deallocate(jumps_inv)
     
     write(6, "(a)") &
-    "! ----------- Passed unittest_inference_OMP ----------- !"
+    "! ----------- Passed unittest_inference ----------- !"
 
-  end subroutine unittest_inference_OMP
+  end subroutine unittest_inference
   
   subroutine pwc_intpl(rfld, fld)
     real(kind=dp), dimension(:,:), intent(inout) :: rfld
@@ -1629,7 +1686,7 @@ contains
     
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
+    call read_theta(dof, trim(output_fld)//"theta_MPI", sc, restart_ind)
 !     call allocate(dof, m-1, n-1, m/2+1, n/2+1)
 !     call init_dof(dof, sc)
     
@@ -1757,7 +1814,9 @@ contains
     do DavisID = 1, 2
       if (DavisID .eq. 1) then
         write(suffix, "(a)") "_676"
-        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/production/DavisDiffusivity_ScarceData/postprocess_output/out/"//trim(KDavis_fld), sc)
+        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/ &
+              & production/DavisDiffusivity_ScarceData/postprocess_output/out/" &
+              & //trim(KDavis_fld), sc)
       else
         write(suffix, "(a)") "_40000"
         call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
@@ -1832,7 +1891,7 @@ contains
     call deallocate(jumps_inv)
     
     write(6, "(a)") &
-    "! ----------- Passed unittest_inference_OMP ----------- !"
+    "! ----------- Passed unittest_inference ----------- !"
 
   end subroutine unittest_validate_inference
   
@@ -2084,7 +2143,7 @@ contains
     call deallocate(jumps_inv)
 
     write(6, "(a)") &
-    "! ----------- Passed unittest_inference_OMP ----------- !"
+    "! ----------- Passed unittest_inference ----------- !"
 
   end subroutine unittest_optimisation_OMP
 
