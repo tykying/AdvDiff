@@ -869,7 +869,7 @@ contains
       ! log-likelihood
       allocate(loglik(IndFn%nIND))
       
-      !$OMP PARALLEL DO num_threads(16)
+      !$OMP PARALLEL DO
       do i = 1, IndFn%nIND
         loglik(i) = eval_INDk_loglik(IndFn%INDk_list(i), jumps, IndFn, mesh, dof_solver, h, nts_adapted)
       end do

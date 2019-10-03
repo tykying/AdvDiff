@@ -18,6 +18,7 @@ program advdiff
 contains
 
   subroutine unittest()
+    integer :: i, Td, layer
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
     !call unittest_comptools()
     !call unittest_trajdata()
@@ -28,10 +29,12 @@ contains
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    call unittest_inference()
-    !call unittest_validate_inference()
     !call unittest_optimisation_OMP()
     !call unittest_TG_instability()
+    call inference(Td=32, layer=1)
+    !do i = 1, 3
+    !  call validate_inference(Td=32*i, layer=2)
+    !end do
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -1099,8 +1102,8 @@ contains
       call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
       !call timestep_heun_Kflux_Src_nonstat(q, dt, t_i, K_e)
       ! B
-      !call timestep_LMT_2D(q, dt, uv_fld)
-      call timestep_LaxWendoff(q, dt, uv_fld)
+      call timestep_LMT_2D(q, dt, uv_fld)
+      !call timestep_LaxWendoff(q, dt, uv_fld)
       ! A
       call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i+0.5_dp*dt, K_e)
       
@@ -1113,6 +1116,7 @@ contains
       
       err_sup = max(err_int, err_sup)
     end do
+    
 !     call write(q, "./unittest/convergence/q_final", nts*dt, nts)
 
 !     ! (1/2A)BAB..AB(1/2A)
@@ -1142,8 +1146,8 @@ contains
 !     call imposeBC(q_exact)
 !     call addto(q_err, q_exact, -1.0_dp)
 !     err_int = dsqrt(int_sq_field(q_err)/(m * n))
-    
-    err_sup = max(err_int, err_sup)
+!     
+!     err_sup = max(err_int, err_sup)
       
     call deallocate(q)
     call deallocate(q_exact)
@@ -1264,16 +1268,18 @@ contains
 
 #define OMP0MPI1 1
 
-  subroutine unittest_inference()
+  subroutine inference(Td, layer)
 #if OMP0MPI1 == 0
     use omp_lib
 #elif OMP0MPI1 == 1
     use mpi
 #endif
+    integer, intent(in) :: Td
+    integer, intent(in) :: layer
+    
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
-!     real(kind=dp) :: T
 
     integer :: m, n, cell, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
@@ -1297,8 +1303,6 @@ contains
     integer :: iter, niter, ind
     real(kind=dp) :: alphaUniRV
 
-    integer, parameter :: Td = 32
-    integer, parameter :: layer = 1
     character(len = 128) :: RunProfile
     character(len = 256) :: output_fld, Td_char, resol_param
 
@@ -1322,7 +1326,7 @@ contains
     ! MPI
     integer :: my_id, num_procs
 #if OMP0MPI1 == 1
-    integer :: ierr
+    integer :: ierr, PROVIDED
     real(kind=dp) :: SlogPost_local
     real(kind=dp) :: SlogPost_global = 0.0_dp
 #endif
@@ -1331,8 +1335,6 @@ contains
     ! m, n: DOF/control
     m = 16
     n = 16
-    m = 8
-    n = 8
     ! m_solver: solver grid
     m_solver = 64
     ! m_Ind, n_Ind: indicator functions
@@ -1352,9 +1354,16 @@ contains
     my_id = 0
     num_procs = 1
     
+    call omp_set_num_threads(32);
+
     call allocate(IndFn, m_Ind, n_Ind)
 #elif OMP0MPI1 == 1
     call MPI_INIT( ierr )
+    !call MPI_INIT_THREAD(MPI_THREAD_FUNNELED, PROVIDED, ierr)
+    !if (PROVIDED .ne. MPI_THREAD_FUNNELED) call abort_handle( &
+    !    & "Failed to initialise MPI multi-threads", __FILE__, __LINE__)
+    !call omp_set_num_threads(16/num_procs);
+    !write(6, "(a,i0,a,i0)") " #run = ", num_procs, "; each with #threads = ", 16/num_procs
     call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
     call MPI_COMM_SIZE(MPI_COMM_WORLD, num_procs, ierr)
     
@@ -1365,9 +1374,10 @@ contains
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
 
     if (restart_ind .gt. 0) then
-      call read_theta(dof, trim(output_fld)//"theta_MPI", sc, restart_ind)
+      call read_theta(dof, trim(output_fld)//"theta_debug", sc, restart_ind)
     else
-      call allocate(dof, m-1, n-1, m+1, n+1)
+!       call allocate(dof, m-1, n-1, m+1, n+1)
+      call allocate(dof, m-1, n-1, m/2+1, n/2+1)
       call init_dof(dof, sc)
     end if
     
@@ -1452,14 +1462,12 @@ contains
     dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
 #elif OMP0MPI1 == 1
     SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-    if (my_id .eq. (num_procs-1)) SlogPost_global = 0.0_dp
     
-    call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
-             num_procs-1, MPI_COMM_WORLD, ierr)
-    
-    if (my_id .eq. (num_procs-1)) then
-      dof%SlogPost = SlogPost_global
-    end if
+    SlogPost_global = 0.0_dp
+    call MPI_AllReduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
+             MPI_COMM_WORLD, ierr)
+        
+    dof%SlogPost = SlogPost_global
 #endif
 
     ! I/O
@@ -1467,7 +1475,7 @@ contains
       write(6, "(i0, a, "//dp_chr//")") 10*ind, "-th step: logPost = ", dof%SlogPost
       flush(6)
       
-      call write_theta(dof_old, trim(output_fld)//"theta_MPI", sc, ind)
+      call write_theta(dof_old, trim(output_fld)//"theta_debug", sc, ind)
     end if
 
     call set(dof_old, dof)
@@ -1504,26 +1512,18 @@ contains
         ! Evaluate likelihood
 #if OMP0MPI1 == 0
         dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-        ! Metropolis-Hastings
-        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
-        
 #elif OMP0MPI1 == 1
         SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-        if (my_id .eq. (num_procs-1)) SlogPost_global = 0.0_dp
         
-        call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
-                num_procs-1, MPI_COMM_WORLD, ierr)
+        SlogPost_global = 0.0_dp
+        call MPI_AllReduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
+                 MPI_COMM_WORLD, ierr)
         
-        if (my_id .eq. (num_procs-1)) then
-          dof%SlogPost = SlogPost_global
-          ! Metropolis-Hastings
-          alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
-        end if
-        
-        call MPI_Bcast(alphaUniRV, 1, MPI_DOUBLE_PRECISION, num_procs-1, MPI_COMM_WORLD, ierr)
-!         write(6, *) "my_id = ", my_id, "alphaUniRV = ", alphaUniRV
+        dof%SlogPost = SlogPost_global
 #endif
         
+        ! Metropolis-Hastings
+        alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
         if (UniRV(RV_ind) .lt. alphaUniRV) then
           ! Accepted
           call set(dof_old, dof)
@@ -1546,7 +1546,7 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_MPI", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_debug", sc, ind)
       end if
     end do
     
@@ -1555,15 +1555,11 @@ contains
     call stop(total_timer)
     
     ! I/O
-    if ((my_id .eq. (num_procs-1))) then
-      write(6, "(a, "//dp_chr//")")  "Final step: logPost = ", dof_old%SlogPost
-      write(6, "(a)") "Total timers:"
-      call print(total_timer, "Total time on a node", prefix = "  ")
-      
+    if ((my_id .eq. (num_procs-1))) then      
       ! Write MAP
-      call write_theta(dof_MAP, trim(output_fld)//"theta_MPI", sc, -1)
-      call write_txt(accept_counter, trim(output_fld)//"theta_MPI_accept_counter")
-      call write_txt(canon_SSD, trim(output_fld)//"theta_MPI_canon_SSD")
+      call write_theta(dof_MAP, trim(output_fld)//"theta_debug", sc, -1)
+      call write_txt(accept_counter, trim(output_fld)//"theta_debug_accept_counter")
+      call write_txt(canon_SSD, trim(output_fld)//"theta_debug_canon_SSD")
     end if
     
     ! Release memory
@@ -1582,11 +1578,21 @@ contains
     call deallocate(IndFn)
     call deallocate(jumps)
     call deallocate(jumps_inv)
-    
-    write(6, "(a)") &
-    "! ----------- Passed unittest_inference ----------- !"
 
-  end subroutine unittest_inference
+#if OMP0MPI1 == 1
+    call MPI_FINALIZE(ierr)
+#endif
+
+    if ((my_id .eq. (num_procs-1))) then
+      write(6, "(a, "//dp_chr//")")  "Final step: logPost = ", dof_old%SlogPost
+      write(6, "(a)") "Total timers:"
+      call print(total_timer, "Total time on a node", prefix = "  ")
+      
+      write(6, "(a)") &
+      "! ----------- Passed inference ----------- !"
+    end if
+
+  end subroutine inference
   
   subroutine pwc_intpl(rfld, fld)
     real(kind=dp), dimension(:,:), intent(inout) :: rfld
@@ -1612,8 +1618,10 @@ contains
     
   end subroutine pwc_intpl
   
-  subroutine unittest_validate_inference()
+  subroutine validate_inference(Td, layer)
     use omp_lib
+    integer, intent(in) :: Td, layer
+
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
@@ -1633,8 +1641,6 @@ contains
     
     integer, parameter :: ntune = 1
 
-    integer, parameter :: Td = 64
-    integer, parameter :: layer = 2
     
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
@@ -1648,7 +1654,7 @@ contains
     ! Use Eulerian time-average
     type(field) :: psi_EM
     real(kind=dp) :: t_avg
-    integer :: nEM
+    integer :: nEMx, nEMy 
     character(len=256) :: KDavis_fld
     ! Use Eulerian time-average
     
@@ -1680,13 +1686,13 @@ contains
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     write(6, "(a, a)") "Output path: ", trim(output_fld)
     
-    m_solver = 128
+    m_solver = 64
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call read_theta(dof, trim(output_fld)//"theta_MPI", sc, restart_ind)
+    call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
 !     call allocate(dof, m-1, n-1, m/2+1, n/2+1)
 !     call init_dof(dof, sc)
     
@@ -1711,12 +1717,6 @@ contains
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
     
     ! Calculate nts = number of timesteps needed in solving FP
-    !dt = 0.375_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 0.75_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 1.5_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 3.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 2.0_dp*3600.0_dp  ! 1.5 hours, in seconds
-    !dt = 6.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     dt = 12.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
     
@@ -1739,7 +1739,6 @@ contains
     ! Timer
     call reset(total_timer)
     call start(total_timer)
-
     
     call allocate(dof_solver, mesh)
     call intpl_dof_solver(dof_solver, dof, mesh)
@@ -1749,7 +1748,6 @@ contains
     
     nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
     write(6, *) "nts_adapted = ", nts_adapted
-    
     
     ! MAP diffusivity
     ! Solve FK equation
@@ -1764,14 +1762,14 @@ contains
         
         call initialise_q_Gauss(q, Gauss_param, mesh)
         write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/q0"
-        call write(q, trim(output_q), 0.0_dp, INDk)
+                                          trim(RunProfile), "/", trim(Td_char), "/"
+        call write(q, trim(output_q)//"q0", 0.0_dp, INDk)
         
         call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, 2*nts_adapted)
         
         write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/q"
-        call write(q, trim(output_q), h, INDk)
+                                          trim(RunProfile), "/", trim(Td_char), "/"
+        call write(q, trim(output_q)//"q", h, INDk)
         
         call deallocate(q)
       end do
@@ -1779,8 +1777,6 @@ contains
 
     ! Write theta_MAP
     call write_theta(dof_solver, trim(output_q)//"theta_MAP", sc)
-
-    call deallocate(dof_solver)
     
     
     ! Davis diffusivity
@@ -1795,57 +1791,48 @@ contains
     write(6, *) "Using Eulerian time-averaged mean flow of ", t_avg, " years"
     
     !N.B.: psi_EM%m = 512
-    nEM = m_solver
-    call allocate(dof_EM, nEM+1, nEM+1, nEM+1, nEM+1)
     
     ! Filter out
-    dof_EM%psi%data = 0.0_dp
-    call sine_filter(dof_EM%psi%data(2:size(dof_EM%psi%data,1)-1, 2:size(dof_EM%psi%data,2)-1), &
-          psi_EM%data(2:size(psi_EM%data,1)-1, 2:size(psi_EM%data,2)-1) )
+    nEMx = size(psi_EM%data, 1) - 1
+    nEMy = size(psi_EM%data, 2) - 1
+
+    dof_solver%psi%data = 0.0_dp
+    call sine_filter(dof_solver%psi%data(2:m_solver, 2:m_solver), psi_EM%data(2:nEMx, 2:nEMy) )
     call deallocate(psi_EM)
     
     write(KDavis_fld, "(a,i0,a,i0,a)") "KDavis_L",layer,"_h",Td, "d"
-    
-    dof_EM%psi%type_id = 1  ! Adhoc
-    dof_EM%K11%type_id = 1  ! Adhoc
-    dof_EM%K12%type_id = 1  ! Adhoc
-    dof_EM%K22%type_id = 1  ! Adhoc
-      
+
     do DavisID = 1, 2
       if (DavisID .eq. 1) then
         write(suffix, "(a)") "_676"
-        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/ &
-              & production/DavisDiffusivity_ScarceData/postprocess_output/out/" &
-              & //trim(KDavis_fld), sc)
+        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/&
+              &production/DavisDiffusivity_ScarceData/postprocess_output/out/"&
+              &//trim(KDavis_fld), sc)
       else
         write(suffix, "(a)") "_40000"
         call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
       end if
-
-      dof_Davis%K11%type_id = -2  ! Adhoc
-      dof_Davis%K12%type_id = -2  ! Adhoc
-      dof_Davis%K22%type_id = -2  ! Adhoc
-
-      call print_info(dof_Davis)
-  !     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
-
-      call pwc_intpl(dof_EM%K11%data(1:nEM,1:nEM), dof_Davis%K11%data)
-      call pwc_intpl(dof_EM%K22%data(1:nEM,1:nEM), dof_Davis%K22%data)
-      call pwc_intpl(dof_EM%K12%data(1:nEM,1:nEM), dof_Davis%K12%data)
+      
+!     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
+      call pwc_intpl(dof_solver%K11%data(1:m_solver,1:m_solver), dof_Davis%K11%data)
+      call pwc_intpl(dof_solver%K22%data(1:m_solver,1:m_solver), dof_Davis%K22%data)
+      call pwc_intpl(dof_solver%K12%data(1:m_solver,1:m_solver), dof_Davis%K12%data)
+      
+      call deallocate(dof_Davis)
       
       ! Ad-hoc way
-      dof_EM%K11%data(nEM+1,:) = dof_EM%K11%data(nEM,:)
-      dof_EM%K22%data(nEM+1,:) = dof_EM%K22%data(nEM,:)
-      dof_EM%K12%data(nEM+1,:) = dof_EM%K12%data(nEM,:)
-      dof_EM%K11%data(:,nEM+1) = dof_EM%K11%data(:,nEM)
-      dof_EM%K22%data(:,nEM+1) = dof_EM%K22%data(:,nEM)
-      dof_EM%K12%data(:,nEM+1) = dof_EM%K12%data(:,nEM)
+      dof_solver%K11%data(m_solver+1,:) = dof_solver%K11%data(m_solver,:)
+      dof_solver%K22%data(m_solver+1,:) = dof_solver%K22%data(m_solver,:)
+      dof_solver%K12%data(m_solver+1,:) = dof_solver%K12%data(m_solver,:)
+      dof_solver%K11%data(:,m_solver+1) = dof_solver%K11%data(:,m_solver)
+      dof_solver%K22%data(:,m_solver+1) = dof_solver%K22%data(:,m_solver)
+      dof_solver%K12%data(:,m_solver+1) = dof_solver%K12%data(:,m_solver)
       
       dt_arg = h/nts
-      dt_min = dt_CFL(dof_EM%psi, 0.1_dp)
+      dt_min = dt_CFL(dof_solver%psi, 0.1_dp)
       
       nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
-      write(6, *) "nts_adapted = ", nts_adapted
+      write(6, *) "DavisID = ", DavisID, "; nts_adapted = ", nts_adapted, "; dt_min =", dt_min
       
       write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
                                           trim(RunProfile), "/", trim(Td_char), "/"
@@ -1858,7 +1845,7 @@ contains
           Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
           
           call initialise_q_Gauss(q, Gauss_param, mesh)
-          call advdiff_q(q, dof_EM%psi, dof_EM%K11, dof_EM%K22, dof_EM%K12, h, nts_adapted)
+          call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts_adapted)
           
           call write(q, trim(output_q)//"Davis"//trim(suffix), h, INDk)
           
@@ -1866,14 +1853,14 @@ contains
         end do
       end do
       
-    ! Write theta_MAP
+      ! Write theta_MAP
       if (DavisID .eq. 1) then
-        call write_theta(dof_EM, trim(output_q)//"theta_Davis", sc, 676)
+        call write_theta(dof_solver, trim(output_q)//"theta_Davis", sc, 676)
       else
-        call write_theta(dof_EM, trim(output_q)//"theta_Davis", sc, 40000)
+        call write_theta(dof_solver, trim(output_q)//"theta_Davis", sc, 40000)
       end if
       
-      call deallocate(dof_Davis)
+      
     end do
 !     !! End: Use Eulerian time-average
         
@@ -1883,7 +1870,7 @@ contains
     call print(total_timer, "Total time on a node", prefix = "  ")
     
     ! Release memory
-    call deallocate(dof_EM)
+    call deallocate(dof_solver)
     call deallocate(dof_inv)
     call deallocate(dof)
     call deallocate(IndFn)
@@ -1891,9 +1878,9 @@ contains
     call deallocate(jumps_inv)
     
     write(6, "(a)") &
-    "! ----------- Passed unittest_inference ----------- !"
+    "! ----------- Passed inference ----------- !"
 
-  end subroutine unittest_validate_inference
+  end subroutine validate_inference
   
   subroutine unittest_optimisation_OMP()
     use omp_lib
@@ -2143,7 +2130,7 @@ contains
     call deallocate(jumps_inv)
 
     write(6, "(a)") &
-    "! ----------- Passed unittest_inference ----------- !"
+    "! ----------- Passed inference ----------- !"
 
   end subroutine unittest_optimisation_OMP
 
