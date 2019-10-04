@@ -1266,7 +1266,7 @@ contains
       "! ----------- Passed unittest_timer ----------- !"
   end subroutine unittest_timer
 
-#define OMP0MPI1 1
+#define OMP0MPI1 0
 
   subroutine inference(Td, layer)
 #if OMP0MPI1 == 0
@@ -1354,7 +1354,7 @@ contains
     my_id = 0
     num_procs = 1
     
-    call omp_set_num_threads(32);
+    call omp_set_num_threads(10);
 
     call allocate(IndFn, m_Ind, n_Ind)
 #elif OMP0MPI1 == 1
@@ -1374,10 +1374,10 @@ contains
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
 
     if (restart_ind .gt. 0) then
-      call read_theta(dof, trim(output_fld)//"theta_debug", sc, restart_ind)
+      call read_theta(dof, trim(output_fld)//"theta_smallK", sc, restart_ind)
     else
-!       call allocate(dof, m-1, n-1, m+1, n+1)
-      call allocate(dof, m-1, n-1, m/2+1, n/2+1)
+      call allocate(dof, m-1, n-1, m+1, n+1)
+!       call allocate(dof, m-1, n-1, m/2+1, n/2+1)
       call init_dof(dof, sc)
     end if
     
@@ -1475,7 +1475,7 @@ contains
       write(6, "(i0, a, "//dp_chr//")") 10*ind, "-th step: logPost = ", dof%SlogPost
       flush(6)
       
-      call write_theta(dof_old, trim(output_fld)//"theta_debug", sc, ind)
+      call write_theta(dof_old, trim(output_fld)//"theta_smallK", sc, ind)
     end if
 
     call set(dof_old, dof)
@@ -1483,7 +1483,6 @@ contains
     
     ! Generate random numbers
     niter = 400
-    niter = 1
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     call randn(stdnRV, (/ 1989, 6, m_solver, Td /))
@@ -1546,7 +1545,7 @@ contains
         FLUSH(6)
         
         ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta_debug", sc, ind)
+        call write_theta(dof_old, trim(output_fld)//"theta_smallK", sc, ind)
       end if
     end do
     
@@ -1557,9 +1556,9 @@ contains
     ! I/O
     if ((my_id .eq. (num_procs-1))) then      
       ! Write MAP
-      call write_theta(dof_MAP, trim(output_fld)//"theta_debug", sc, -1)
-      call write_txt(accept_counter, trim(output_fld)//"theta_debug_accept_counter")
-      call write_txt(canon_SSD, trim(output_fld)//"theta_debug_canon_SSD")
+      call write_theta(dof_MAP, trim(output_fld)//"theta_smallK", sc, -1)
+      call write_txt(accept_counter, trim(output_fld)//"theta_smallK_accept_counter")
+      call write_txt(canon_SSD, trim(output_fld)//"theta_smallK_canon_SSD")
     end if
     
     ! Release memory

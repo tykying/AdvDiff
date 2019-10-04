@@ -23,13 +23,14 @@ SECONDS=0
 #nohup ./advdiff > mon_advdiff_TTG.txt &
 #nohup ./advdiff > mon_advdiff_h64d_bilinear.txt &
 #nohup ./advdiff > mon_advdiff_h32d_unstructured2.txt &
+nohup ./advdiff > mon_advdiff_h32d_smallK.txt &
 #nohup ./advdiff > mon_advdiff_h32d_highres80.txt &
 #nohup ./advdiff > mon_advdiff_h64d_L2_sigma_64K.txt &
 #nohup ./advdiff > mon_advdiff_h32d_L1_sigma.txt &
 #nohup ./advdiff > LW_convtest2.txt &
 #nohup ./advdiff > MC_convtest2.txt &
 #./advdiff
-mpirun -np 32 ./advdiff
+#mpirun -np 32 ./advdiff
 #mpirun -np 4 ./advdiff
 elapsedseconds=$SECONDS
 echo Time taken = $elapsedseconds

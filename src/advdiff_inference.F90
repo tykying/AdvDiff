@@ -221,6 +221,9 @@ contains
     call set(dof%K11, 5.0_dp*kappa_scale*ssc)
     call set(dof%K22, 5.0_dp*kappa_scale*ssc)
     call set(dof%K12, 0.0_dp*kappa_scale*ssc)
+
+    call set(dof%K11, 0.5_dp*kappa_scale*ssc)
+    call set(dof%K22, 0.5_dp*kappa_scale*ssc)
     
     call imprint_canon(dof)
     
