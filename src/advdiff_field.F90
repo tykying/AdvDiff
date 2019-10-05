@@ -1,3 +1,4 @@
+#define FFTW3 0
 module advdiff_field
   use advdiff_precision
   use advdiff_debug
@@ -138,8 +139,49 @@ contains
 
   end subroutine deallocate_field
   
+  subroutine sine_basis(inout, wavenumber, amplitude)
+#if FFTW3 == 1
+    ! inout: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
+    use, intrinsic :: iso_c_binding 
+    include 'fftw3.f03'
+    
+    real(kind=dp), dimension(:, :), intent(inout) :: inout
+    integer :: wavenumber
+    real(kind=dp), intent(in) :: amplitude
+    
+    type(C_PTR) :: plan
+    real(kind=dp), dimension(:, :), allocatable :: Bpq
+    
+    integer :: i, j
+    
+    
+    allocate(Bpq(size(inout,1), size(inout,2)))
+    Bpq = 0.0_dp
+    
+    Bpq(wavenumber, wavenumber) = amplitude
+    
+    plan = fftw_plan_r2r_2d(size(inout,2),size(inout,1), Bpq, &
+                          inout, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
+    call fftw_execute_r2r(plan, Bpq, inout)
+    call fftw_destroy_plan(plan)
+    
+!     inout = inout/real(4*size(inout,1)*size(inout,2), kind=dp)
+    inout = inout/4.0_dp
+    
+    deallocate(Bpq)
+    call fftw_cleanup()
+#else
+    real(kind=dp), dimension(:, :), intent(inout) :: inout
+    integer :: wavenumber
+    real(kind=dp), intent(in) :: amplitude
+    
+    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+#endif
+  end subroutine sine_basis
+  
   ! Fourier interpolations
   subroutine fourier_intpl(out, in, Mx, My)
+#if FFTW3 == 1
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
     
@@ -219,10 +261,17 @@ contains
     deallocate(Zk_pad)
     deallocate(in_copy)
     call fftw_cleanup()
+#else
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
     
+    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+#endif
   end subroutine fourier_intpl
 
   subroutine cosine_intpl(out, in, Mx, My)
+#if FFTW3 == 1
     ! NOT IN USE
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
@@ -281,10 +330,17 @@ contains
     deallocate(Bpq_pad)
     deallocate(in_copy)
     call fftw_cleanup()
-
+#else
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+    
+    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+#endif
   end subroutine cosine_intpl
 
   subroutine sine_intpl(out, in, Mx, My)
+#if FFTW3 == 1
     ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
@@ -345,10 +401,17 @@ contains
     deallocate(Bpq_pad)
     deallocate(in_copy)
     call fftw_cleanup()
-
+#else
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    integer, intent(in) :: Mx, My  ! Factor of scaling up
+    
+    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+#endif
   end subroutine sine_intpl
   
   subroutine sine_filter(out, in)
+#if FFTW3 == 1
     ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
     use, intrinsic :: iso_c_binding 
     include 'fftw3.f03'
@@ -392,7 +455,12 @@ contains
     deallocate(Bpq_pad)
     deallocate(in_copy)
     call fftw_cleanup()
-
+#else
+    real(kind=dp), dimension(:, :), intent(out) :: out
+    real(kind=dp), dimension(:, :), intent(in) :: in
+    
+    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+#endif
   end subroutine sine_filter
   
   subroutine bilinear_intpl(out, in, Mx, My)

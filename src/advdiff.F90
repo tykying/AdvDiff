@@ -633,9 +633,6 @@ contains
   end function rotsym
   
   subroutine unittest_fftw()
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-  
     integer, parameter :: Nx = 8
     integer, parameter :: Ny = 16
     real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
@@ -1266,7 +1263,7 @@ contains
       "! ----------- Passed unittest_timer ----------- !"
   end subroutine unittest_timer
 
-#define OMP0MPI1 0
+#define OMP0MPI1 1
 
   subroutine inference(Td, layer)
 #if OMP0MPI1 == 0
@@ -1483,6 +1480,7 @@ contains
     
     ! Generate random numbers
     niter = 400
+    niter = 1
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     call randn(stdnRV, (/ 1989, 6, m_solver, Td /))
@@ -2654,38 +2652,5 @@ contains
       end do
     
   end subroutine initialise_q_Gaussian
-  
-  subroutine sine_basis(inout, wavenumber, amplitude)
-    ! inout: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-    
-    real(kind=dp), dimension(:, :), intent(inout) :: inout
-    integer :: wavenumber
-    real(kind=dp), intent(in) :: amplitude
-    
-    type(C_PTR) :: plan
-    real(kind=dp), dimension(:, :), allocatable :: Bpq
-    
-    integer :: i, j
-    
-    
-    allocate(Bpq(size(inout,1), size(inout,2)))
-    Bpq = 0.0_dp
-    
-    Bpq(wavenumber, wavenumber) = amplitude
-    
-    plan = fftw_plan_r2r_2d(size(inout,2),size(inout,1), Bpq, &
-                          inout, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, Bpq, inout)
-    call fftw_destroy_plan(plan)
-    
-!     inout = inout/real(4*size(inout,1)*size(inout,2), kind=dp)
-    inout = inout/4.0_dp
-    
-    deallocate(Bpq)
-    call fftw_cleanup()
-    
-  end subroutine sine_basis
-  
+
 end program advdiff
