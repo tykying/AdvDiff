@@ -6,7 +6,8 @@ echo Running AdvDiff
 #ln -sf /home/s1046972/opt/FORTRAN_LIB/fftw/lib/libfftw3.a ./lib/libfftw3.a
 #ln -sf /home/s1046972/opt/FORTRAN_LIB/fftw/include/fftw3.f03 ./lib/fftw3.f03
 
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PWD/lib
+#export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PWD/lib
+export LD_RUN_PATH=$LD_RUN_PATH:$PWD/lib
 #export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/intel/2013/composer_xe_2013.0.079/compiler/lib/intel64
 
 #echo LD_LIBRARY_PATH=$LD_LIBRARY_PATH
@@ -27,11 +28,12 @@ SECONDS=0
 #nohup ./advdiff > mon_advdiff_h32d_highres80.txt &
 #nohup ./advdiff > mon_advdiff_h64d_L2_sigma_64K.txt &
 #nohup ./advdiff > mon_advdiff_h32d_L1_sigma.txt &
+#nohup ./advdiff > mon_advdiff_h32d_L1_64Ind.txt &
 #nohup ./advdiff > LW_convtest2.txt &
 #nohup ./advdiff > MC_convtest2.txt &
-#./advdiff
+./advdiff 1 2 3 4 5
 #mpirun -np 32 ./advdiff
-mpirun -np 4 ./advdiff
+#mpirun -np 4 ./advdiff
 elapsedseconds=$SECONDS
 echo Time taken = $elapsedseconds
 date 

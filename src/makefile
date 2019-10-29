@@ -38,6 +38,10 @@ advdiff_inference.o: advdiff_field.o advdiff_precision.o advdiff_timestep.o \
   advdiff_debug.o advdiff_timing.o advdiff_parameters.o \
   advdiff_trajdata.o 
 
+advdiff_unittest.o: advdiff_field.o advdiff_precision.o advdiff_timestep.o \
+  advdiff_debug.o advdiff_timing.o advdiff_parameters.o \
+  advdiff_trajdata.o advdiff_inference.o advdiff_io.o
+
 clean:
 	rm -fv $(OBJS)
 	rm -fv $(addsuffix .mod, $(basename $(OBJS)))

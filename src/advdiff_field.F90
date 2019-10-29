@@ -1,4 +1,4 @@
-#define FFTW3 0
+#define FFTW3 1
 module advdiff_field
   use advdiff_precision
   use advdiff_debug
@@ -14,7 +14,7 @@ module advdiff_field
     & eval_field, iszero
     
   public :: indicator_field
-  public :: uv_signed, K_flux, T_operator
+  public :: uv_signed, K_flux
   public :: print_info, diff_int
   public :: testcase_fields, fld_x, assign_q_periodic
   public :: q_stat, S_rhs_nonstat, S_rhs_stat
@@ -23,6 +23,7 @@ module advdiff_field
   public :: sine_filter
   public :: del2
   public :: dt_CFL
+  public :: sine_basis
   
   ! Note: field and field_ptr are different
   type field
@@ -47,13 +48,8 @@ module advdiff_field
     real(kind = dp), dimension(:, :), pointer :: K11e, K21e, K12e, K22e
   end type K_flux
 
-  type T_operator
-    real(kind = dp), dimension(4, 4) :: T
-  end type T_operator
-
   interface allocate
-    module procedure allocate_field, allocate_uv, allocate_Kflux !, &
-!                      allocate_refined_field
+    module procedure allocate_field, allocate_uv, allocate_Kflux
   end interface allocate
 
   interface deallocate
