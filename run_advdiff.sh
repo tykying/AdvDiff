@@ -9,7 +9,6 @@ echo Running AdvDiff
 #export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PWD/lib
 export LD_RUN_PATH=$LD_RUN_PATH:$PWD/lib
 #export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/intel/2013/composer_xe_2013.0.079/compiler/lib/intel64
-
 #echo LD_LIBRARY_PATH=$LD_LIBRARY_PATH
 
 #sleep 5
@@ -19,21 +18,31 @@ make
 
 date
 SECONDS=0
-#nohup ./advdiff > mon_advdiff_bilinear_h32d_prior2_L2.txt &
-#nohup ./advdiff > mon_advdiff_bilinear_h32d_canon_lmt.txt &
-#nohup ./advdiff > mon_advdiff_TTG.txt &
-#nohup ./advdiff > mon_advdiff_h64d_bilinear.txt &
-#nohup ./advdiff > mon_advdiff_h32d_unstructured2.txt &
-#nohup ./advdiff > mon_advdiff_h32d_smallK.txt &
-#nohup ./advdiff > mon_advdiff_h32d_highres80.txt &
-#nohup ./advdiff > mon_advdiff_h64d_L2_sigma_64K.txt &
-#nohup ./advdiff > mon_advdiff_h32d_L1_sigma.txt &
-#nohup ./advdiff > mon_advdiff_h32d_L1_64Ind.txt &
-#nohup ./advdiff > LW_convtest2.txt &
-#nohup ./advdiff > MC_convtest2.txt &
-./advdiff 1 2 3 4 5
-#mpirun -np 32 ./advdiff
-#mpirun -np 4 ./advdiff
+
+Td=32
+layer=2
+NPart=676
+for Phase in {2..3}
+do
+  Seed_ID=1
+  
+  # QG
+  output_fld="./output/N4096_D256_I256/QGM2_L"$layer"_NPART"$NPart""
+  
+  # TTG
+  output_fld="./output/N4096_D64_I64/TTG_sinusoidal"
+  Td=30
+  
+  output_dir=$output_fld"/h"$Td"d/Seed"$Seed_ID
+  mkdir -p $output_dir"/SpinUp"
+  mkdir -p $output_dir"/Tuned"
+  mkdir -p $output_dir"/Data"
+  mkdir -p $output_dir"/screen"
+  nohup mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID > $output_dir"/screen/Phase"$Phase".txt"
+  #mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID
+  #./advdiff $Td $layer $NPart $Phase $Seed_ID
+done
+
 elapsedseconds=$SECONDS
 echo Time taken = $elapsedseconds
 date 

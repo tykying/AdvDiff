@@ -290,7 +290,6 @@ contains
     real(kind=dp) :: q_int_0, x, y
     real(kind=dp), dimension(:,:), allocatable :: dqx, dqy
     
-    real(kind=dp), dimension(:,:), allocatable :: exactval
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
 
     m = 4
@@ -1247,7 +1246,6 @@ contains
       use omp_lib
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
-    real(kind=dp) :: T
 
     integer :: m, n, cell, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
@@ -1259,11 +1257,11 @@ contains
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     real(kind=dp) :: sc, h, dt
-    integer :: nts, nts_sub, dt_rf
+    integer :: nts, dt_rf
     real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
 
     integer :: dof_id
-    integer :: iter, niter, ind
+    integer :: iter, ind
 
     integer, parameter :: Td = 32
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"

@@ -19,16 +19,16 @@ module advdiff_io
   end interface read_header
 
   interface read
-    module procedure read_field, read_traj, read_dof
+    module procedure read_field, read_traj, read_dof, read_ssd
   end interface read
 
   ! Interface: allowing overloading the 'write' function by the parameters input
   interface write
-    module procedure write_field, write_dof
+    module procedure write_field, write_dof, write_ssd
   end interface write
   
   interface write_txt
-    module procedure write_array_dp1d, write_array_dp, write_array_int
+    module procedure write_array_dp1d, write_array_dp
   end interface write_txt
 
 
@@ -134,8 +134,7 @@ contains
     real(kind=dp), dimension(:), intent(in) :: array
     character(len = *), intent(in) :: filename
     character(len = 16) :: collen
-    integer :: i
-
+    
     write(collen, "(i0)") size(array, 1)
 
     open(unit = output_unit, file = trim(filename) // ".txt", &
@@ -161,23 +160,6 @@ contains
     close(output_unit)
 
   end subroutine write_array_dp
-  
-  subroutine write_array_int(array, filename)
-    integer, dimension(:,:), intent(in) :: array
-    character(len = *), intent(in) :: filename
-    character(len = 16) :: collen
-    integer :: i
-
-    write(collen, "(i0)") size(array, 2)
-
-    open(unit = output_unit, file = trim(filename) // ".txt", &
-      & status = "replace", action = "write")
-    do i = 1, size(array, 1)
-      write(output_unit, '('//collen//'(i0, ","))') array(i, :)
-    end do
-    close(output_unit)
-
-  end subroutine write_array_int
 
   subroutine read_traj_header(traj, filename, t, index)
     type(trajdat), intent(out) :: traj
@@ -252,6 +234,7 @@ contains
 
   end subroutine read_traj
 
+  
   subroutine write_dof(dof, filename, SlogPost, sc, index)
     type(dofdat), intent(in) :: dof
     character(len = *), intent(in) :: filename
@@ -336,6 +319,28 @@ contains
     
   end subroutine read_dof
   
+  subroutine write_SSD(canon_SSD, filename)
+    real(kind=dp), dimension(:), intent(in) :: canon_SSD
+    character(len = *), intent(in) :: filename
+        
+    open(unit = output_unit, file = trim(filename) // ".dat", &
+      & status = "replace", access = "stream", action = "write")
+    write(output_unit) canon_SSD
+    close(output_unit)
+
+  end subroutine write_SSD
+  
+  subroutine read_SSD(canon_SSD, filename)
+    real(kind=dp), dimension(:), intent(inout) :: canon_SSD
+    character(len = *), intent(in) :: filename
+        
+    open(unit = input_unit, file = trim(filename) // ".dat", &
+      & status = "old", access = "stream", action = "read")
+    read(input_unit) canon_SSD
+    close(input_unit)
+
+  end subroutine read_SSD
+  
   subroutine write_theta(dof, filename, sc, index)
     type(dofdat), intent(in) :: dof
     character(len = *), intent(in) :: filename
@@ -391,7 +396,6 @@ contains
     character(len = *), intent(in) :: filename
     integer, optional, intent(in) :: index
 
-    character(len = 1) :: chr
     character(len = max_line_len) :: input_chr
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
     integer :: m_psi, n_psi, type_id
@@ -437,10 +441,7 @@ contains
     real(kind=dp), optional, intent(in) :: sc
     integer, optional, intent(in) :: index
 
-    character(len = 1) :: chr
-    character(len = max_line_len) :: input_chr
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
-    integer :: n_theta
     real(kind=dp), dimension(:), allocatable :: theta
     real(kind=dp) :: rsc
 
@@ -486,7 +487,7 @@ contains
     character(len = field_name_len) :: name
     character(len = max_line_len) :: format_chr, input_chr
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
-    integer :: i, m, n, type_id
+    integer :: i, m, n
 
     lfilename = trim(filename)
 

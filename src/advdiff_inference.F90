@@ -21,6 +21,7 @@ module advdiff_inference
   public :: convert_dof_to_canon, convert_canon_to_dof
   public :: propose_dof_canon, propose_dof_EM
   public :: evaluate_logPost_OMP
+  public :: tune_SSD
 
   type dofdat
     integer :: m_psi, n_psi
@@ -171,7 +172,7 @@ contains
         end if
       else
         allocate(InfFn%INDk_list(1))
-        InfFn%INDk_list(1) = 0.0_dp
+        InfFn%INDk_list(1) = 0
       end if
     else
       InfFn%NInd = NInd_total
@@ -308,7 +309,7 @@ contains
     real(kind=dp), dimension(3), intent(in) :: Gauss_param    !=(mean_x, mean_y, sigma)
     type(meshdat), intent(in) :: mesh
 
-    integer :: k_i, i, j, gl
+    integer :: i, j, gl
     real(kind=dp) :: x, y, x0, y0, Sigma0
     real(kind=dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
     real(kind=dp) :: tmp
@@ -413,11 +414,13 @@ contains
     integer :: m, n, Mx, My
     real(kind=dp), dimension(:, :), allocatable :: fldij ! Bilinear intepolation
     
-    ! Unstructured grid
+#define UNSTRUC_GRID 0
+
+#if UNSTRUC_GRID == 1
     integer, dimension(:), allocatable :: xind, yind
     integer :: i, j, k
-    ! END Unstructured grid
-    
+#endif
+
     ! Quantities other than the field: same as dof
     dof_solver%m_psi = dof%m_psi
     dof_solver%n_psi = dof%n_psi
@@ -471,57 +474,59 @@ contains
 !     dof_solver%psi%data = 0.0_dp
 !     call sine_intpl(dof_solver%psi%data(2:mesh%m, 2:mesh%n), dof%psi%data, Mx, My)
 
-!     ! Unstructured bilinear intepolation: dof_solver%psi%data
-!     if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
-!       allocate(fldij(m+2, n+2))
-!       fldij = 0.0_dp  ! Boundary condition for streamfunction
-!       fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-! 
-!       dof_solver%psi%data = 0.0_dp
-!       allocate(xind(17))
-!       xind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
-!       xind = xind + 1
-!       allocate(yind(17))
-! !       yind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
-!       yind = (/0, 4, 10, 18, 24, 29, 33, 35, 37, 38, 39, 41, 43, 47, 52, 60, 64 /)
-!       yind = yind + 1
-!       
-!       ! Interpolate along x
-!       do j = 1, size(yind, 1)
-!         do i = 1, (size(xind, 1)-1)
-!           do k = xind(i), (xind(i+1)-1)
-!             dof_solver%psi%data(k, yind(j)) = &
-!               ( fldij(i, j)  *(xind(i+1)-k) + &
-!                 fldij(i+1, j)*(k  -xind(i)) ) / &
-!               (xind(i+1)-xind(i))
-!           end do
-!         end do
-!         
-!         ! Final point: size(xind, 1)
-!         dof_solver%psi%data(xind(size(xind,1)), yind(j)) = 0.0_dp
-!       end do
-!       
-!       ! Interpolate along y
-!       do i = 1, size(dof_solver%psi%data, 2)
-!         do j = 1, (size(yind, 1)-1)
-!           do k = yind(j), (yind(j+1)-1)
-!             dof_solver%psi%data(i, k) = &
-!               ( dof_solver%psi%data(i, yind(j))  *(yind(j+1)-k) + &
-!                 dof_solver%psi%data(i, yind(j+1))*(k  -yind(j)) ) / &
-!               (yind(j+1)-yind(j))
-!           end do
-!         end do
-!         
-!         ! Final point: size(yind, 2)
-!         dof_solver%psi%data(i, yind(size(yind,1))) = 0.0_dp
-!       end do
-!       
-!       deallocate(fldij)
-!       deallocate(xind)
-!       deallocate(yind)
-!     end if
-!     ! END Unstructured grid
-    
+#if UNSTRUC_GRID == 1
+    ! Unstructured bilinear intepolation: dof_solver%psi%data
+    if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
+      allocate(fldij(m+2, n+2))
+      fldij = 0.0_dp  ! Boundary condition for streamfunction
+      fldij(2:(m+1), 2:(n+1)) = dof%psi%data
+
+      dof_solver%psi%data = 0.0_dp
+      allocate(xind(17))
+      xind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
+      xind = xind + 1
+      allocate(yind(17))
+!       yind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
+      yind = (/0, 4, 10, 18, 24, 29, 33, 35, 37, 38, 39, 41, 43, 47, 52, 60, 64 /)
+      yind = yind + 1
+      
+      ! Interpolate along x
+      do j = 1, size(yind, 1)
+        do i = 1, (size(xind, 1)-1)
+          do k = xind(i), (xind(i+1)-1)
+            dof_solver%psi%data(k, yind(j)) = &
+              ( fldij(i, j)  *(xind(i+1)-k) + &
+                fldij(i+1, j)*(k  -xind(i)) ) / &
+              (xind(i+1)-xind(i))
+          end do
+        end do
+        
+        ! Final point: size(xind, 1)
+        dof_solver%psi%data(xind(size(xind,1)), yind(j)) = 0.0_dp
+      end do
+      
+      ! Interpolate along y
+      do i = 1, size(dof_solver%psi%data, 2)
+        do j = 1, (size(yind, 1)-1)
+          do k = yind(j), (yind(j+1)-1)
+            dof_solver%psi%data(i, k) = &
+              ( dof_solver%psi%data(i, yind(j))  *(yind(j+1)-k) + &
+                dof_solver%psi%data(i, yind(j+1))*(k  -yind(j)) ) / &
+              (yind(j+1)-yind(j))
+          end do
+        end do
+        
+        ! Final point: size(yind, 2)
+        dof_solver%psi%data(i, yind(size(yind,1))) = 0.0_dp
+      end do
+      
+      deallocate(fldij)
+      deallocate(xind)
+      deallocate(yind)
+    end if
+    ! END Unstructured grid
+#endif
+
 !     !! Use Eulerian time-average
 !     dof_solver%psi%data = 0.0_dp
 !     dof_solver%psi%data(2:size(dof_solver%psi%data,1)-1, &
@@ -782,29 +787,35 @@ contains
   real(kind=dp) function evaluate_logPrior(dof_solver, prior_param)
     type(dofdat), intent(in) :: dof_solver
     type(priordat), intent(in) :: prior_param
-
+    
     integer :: cid, list_i, list_f
-    integer :: i, j
-
     logical :: inrange
+    
+#define REL_PRIOR 0
+
+#if REL_PRIOR == 1
+    integer :: i, j
     type(field) :: rel
     
     inrange = .TRUE.
     
-!     call allocate(rel, dof_solver%psi%m, dof_solver%psi%n, "rel", &
-!             glayer=dof_solver%psi%glayer, type_id=dof_solver%psi%type_id)
-!     
-!     call del2(rel, dof_solver%psi)
-!     
-!     do j = 1, size(rel%data, 2)
-!       do i = 1, size(rel%data, 1)
-!         if (dabs(rel%data(i,j)) .gt. prior_param%rel_absmax) then
-!           inrange = .FALSE.
-! !           write(6, *) rel%data(i,j)*1.666666666666667E-005
-!         end if
-!       end do
-!     end do
-!    call deallocate(rel)
+    call allocate(rel, dof_solver%psi%m, dof_solver%psi%n, "rel", &
+            glayer=dof_solver%psi%glayer, type_id=dof_solver%psi%type_id)
+    
+    call del2(rel, dof_solver%psi)
+    
+    do j = 1, size(rel%data, 2)
+      do i = 1, size(rel%data, 1)
+        if (dabs(rel%data(i,j)) .gt. prior_param%rel_absmax) then
+          inrange = .FALSE.
+!           write(6, *) rel%data(i,j)*1.666666666666667E-005
+        end if
+      end do
+    end do
+    call deallocate(rel)
+#else
+    inrange = .TRUE.
+#endif
     
     ! Sigma 1 and Sigma 2
     list_i = dof_solver%m_psi*dof_solver%n_psi+1
@@ -839,7 +850,12 @@ contains
     
   subroutine deallocate_prior_param(prior_param)
     type(priordat), intent(inout) :: prior_param
-
+    
+    prior_param%rel_absmax = 0.0_dp
+    
+    prior_param%sigma_max = 0.0_dp
+    prior_param%sigma_min = 0.0_dp
+    
   end subroutine deallocate_prior_param
   
   real(kind=dp) function evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
@@ -895,8 +911,6 @@ contains
     integer, intent(in) :: canon_id
     real(kind = dp), intent(in) :: Z_rv
     
-    real(kind=dp), dimension(:), allocatable :: canon
-        
     dof%canon(canon_id) = dof%canon(canon_id) + canon_SSD(canon_id)*Z_rv
     
     call convert_canon_to_dof(dof, dof%canon, canon_id)
@@ -909,7 +923,6 @@ contains
     integer, intent(in) :: canon_id
     real(kind = dp), intent(in) :: Z_rv
 
-    real(kind=dp), dimension(:), allocatable :: canon
     integer :: canon_K
     
     ! No need to propose psi
@@ -1038,6 +1051,22 @@ contains
     end do
     
   end subroutine compute_dJdm_Cid
+  
+  subroutine tune_SSD(canon_SSD, accept_ratio)
+    real(kind=dp), dimension(:), intent(inout) :: canon_SSD
+    real(kind=dp), dimension(:), intent(in) :: accept_ratio
+    
+    integer :: canon_id
+    
+    do canon_id = 1, size(canon_SSD, 1)
+      if (accept_ratio(canon_id) .ge. 0.35_dp) then
+        canon_SSD(canon_id) = canon_SSD(canon_id) * 1.50_dp
+      elseif  (accept_ratio(canon_id) .le. 0.15_dp) then
+        canon_SSD(canon_id) = canon_SSD(canon_id) * 0.50_dp
+      end if
+    end do
+    
+  end subroutine tune_SSD
     
   subroutine print_info_IndFn(IndFn)
     type(IndFndat), intent(in) :: IndFn

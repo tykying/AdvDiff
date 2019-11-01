@@ -44,7 +44,6 @@ contains
     integer, dimension(4), optional, intent(in) :: ISEED
 
     integer, dimension(4) :: SEED
-    integer :: j
 
     if (present(ISEED)) then
       SEED = ISEED
@@ -62,7 +61,6 @@ contains
     integer, dimension(4), optional, intent(in) :: ISEED
 
     integer, dimension(4) :: SEED
-    integer :: j
 
     if (present(ISEED)) then
       SEED = ISEED

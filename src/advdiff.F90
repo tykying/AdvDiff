@@ -36,21 +36,18 @@ program advdiff
     READ(arg,*) Seed_ID
     
     write(6, "(a, i0, a, i0, a, i0, a, i0, a, i0)") " SampInt = ", Td, &
-              & "d; Layer = ", layer, "; NPart = ", NPart, "; Phase", Phase, & 
+              & "d; Layer = ", layer, "; NPart = ", NPart, "; Phase = ", Phase, & 
               & "; Seed_ID = ", Seed_ID
   else
     call abort_handle("Invalid input to the programme", __FILE__, __LINE__)
   end if
   
-  !call inference(Td, layer, NPart, Phase, Seed_ID)
-  
-  
-  call unittest()
+  call inference(Td, layer, NPart, Phase, Seed_ID)
+  !call unittest()
 
 contains
 
   subroutine unittest()
-    integer :: i, Td, layer
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
     call unittest_comptools()
     !call unittest_trajdata()
@@ -63,14 +60,22 @@ contains
     !call unittest_solver_convergence()
     !call unittest_optimisation_OMP()
     !call unittest_TG_instability()
-    !call inference(Td=32, layer=1)
-    !do i = 1, 3
-    !  call validate_inference(Td=32*i, layer=2)
-    !end do
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
-#define OMP0MPI1 0
+  subroutine validation()
+    integer :: Td_i = 32
+    integer :: layer = 2
+    
+    do Td_i = 1, 3
+      call validate_inference(Td=Td_i*32, layer=layer)
+    end do
+    write(6, *) "!!! ----------- Validation finished ----------- !!!"
+  end subroutine validation
+  
+#define OMP0MPI1 1
+#define IBACKWARD 0
+#define EM_MEAN 0
 
   subroutine inference(Td, layer, NPart, Phase, Seed_ID)
 #if OMP0MPI1 == 0
@@ -81,16 +86,19 @@ contains
     integer, intent(in) :: Td, layer, NPart, Phase, Seed_ID
     
     type(jumpsdat), dimension(:), allocatable :: jumps
-    type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
 
-    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_MAP, dof_old
-    type(dofdat) :: dof_inv
     type(IndFndat) :: IndFn
 
+#if IBACKWARD == 1
+    type(jumpsdat), dimension(:), allocatable :: jumps_inv
+    type(dofdat) :: dof_inv
+#endif
+    
     real(kind=dp) :: sc, h, dt
     integer :: nts
     
@@ -98,24 +106,25 @@ contains
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     
-    integer, parameter :: ntune = 1
-    integer, dimension(:,:), allocatable :: accept_counter
+    integer, dimension(:), allocatable :: accept_counter
     real(kind=dp), dimension(:), allocatable :: canon_SSD
     
-    integer :: canon_id
-    integer :: iter, niter, ind
+    integer :: niter = 500
+    integer :: iter, canon_id, ind
     real(kind=dp) :: alphaUniRV
 
     character(len = 128) :: RunProfile
     character(len = 256) :: output_fld, Td_char, resol_param
-
+    character(len = 256) :: input_fld
+    
     ! Timer
     type(timer), save :: total_timer
     
+#if EM_MEAN == 1
     ! Use Eulerian time-average
     type(field) :: psi_EM
     real(kind=dp) :: t_avg
-    ! Use Eulerian time-average
+#endif
     
     ! Prior
     type(priordat) :: prior_param
@@ -124,9 +133,8 @@ contains
     real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
     integer :: RV_ind, accepted
 
-    
-    integer :: restart_ind = 400
-    integer :: output_dn = 1
+    integer :: restart_ind = 0
+    integer :: output_dn = 100
 
     ! MPI
     integer :: my_id, num_procs
@@ -135,7 +143,6 @@ contains
     real(kind=dp) :: SlogPost_local
     real(kind=dp) :: SlogPost_global = 0.0_dp
 #endif
-
     
     ! m, n: DOF/control
     m = 16
@@ -145,13 +152,46 @@ contains
     ! m_Ind, n_Ind: indicator functions
     m_Ind = 16
     n_Ind = m_Ind
-    
     write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
+    
+    m = 8
+    n = 8
+    ! m_solver: solver grid
+    m_solver = 64
+    ! m_Ind, n_Ind: indicator functions
+    m_Ind = 8
+    n_Ind = m_Ind
+    write(RunProfile, "(a)") "TTG_sinusoidal"
+
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
     write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
     !write(output_fld, "(a,a,a,a,a,a,a)") "/exports/eddie/scratch/s1046972/output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
 
+    write(output_fld, "(a,a,i0,a)") trim(output_fld), "Seed", Seed_ID, "/"
+    
+    write(6, *) trim(output_fld)
+    
+    if (Phase .eq. 1) then
+      niter = 500
+      output_dn = 100
+      restart_ind = 0
+      write(input_fld, "(a,a)") trim(output_fld), "" 
+      write(output_fld, "(a,a)") trim(output_fld), "SpinUp/"
+    elseif (Phase .eq. 2) then
+      niter = 500
+      output_dn = 100
+      restart_ind = -1
+      write(input_fld, "(a,a)") trim(output_fld), "SpinUp/" 
+      write(output_fld, "(a,a)") trim(output_fld), "Tuned/"
+    elseif (Phase .eq. 3) then
+      niter = 800
+      output_dn = 1
+      restart_ind = -1
+      write(input_fld, "(a,a)") trim(output_fld), "Tuned/" 
+      write(output_fld, "(a,a)") trim(output_fld), "Data/"
+    end if
+    
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
 #if OMP0MPI1 == 0
@@ -177,15 +217,13 @@ contains
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
 
-    if (restart_ind .gt. 0) then
-      call read_theta(dof, trim(output_fld)//"theta", sc, restart_ind)
+    if (restart_ind .ne. 0) then
+      call read_theta(dof, trim(input_fld)//"theta", sc, restart_ind)
     else
       call allocate(dof, m-1, n-1, m+1, n+1)
-!       call allocate(dof, m-1, n-1, m/2+1, n/2+1)
       call init_dof(dof, sc)
     end if
     
-#define EM_MEAN 0
 #if EM_MEAN == 1
     !! Use Eulerian time-average
     call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
@@ -216,12 +254,8 @@ contains
 
     ! Allocate array of jumps with initial positions
     call allocate(jumps, mesh)
-    call allocate(jumps_inv, mesh)
-
     ! Convert trajectory into jumps
     call traj2jumps(jumps, traj, mesh)
-    call traj2jumps_inv(jumps_inv, traj, mesh)
-    call deallocate(traj)
     
     ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
@@ -244,24 +278,38 @@ contains
 !     call print_info(jumps, mesh)
     
 !   likelihood for each indicator function
-    allocate(accept_counter(dof%ndof, ntune))
+    allocate(accept_counter(dof%ndof))
     call allocate(canon_SSD, dof)
     
     ! MCMC
-    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     
+#if IBACKWARD == 1
+    call allocate(jumps_inv, mesh)
+    call traj2jumps_inv(jumps_inv, traj, mesh)
+    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
+    call reverse_dof_to_dof_inv(dof_inv, dof)   ! Set reverse psi
+#endif
+
+    call deallocate(traj)
+    
     ! Tune proposal distribution: SSD
     accept_counter = 0
-    call init_canon_SSD(canon_SSD, dof, sc)
     
-    ! Set reverse psi
-!     call reverse_dof_to_dof_inv(dof_inv, dof)
+    if (Phase .eq. 1) then
+      call init_canon_SSD(canon_SSD, dof, sc)
+      ind = restart_ind
+    else
+      ! Read SSD
+      call read(canon_SSD, trim(input_fld)//"canon_SSD")
+      if (restart_ind .eq. -1) then
+        ind = 0
+      else
+        ind = restart_ind
+      end if
+    end if
     
-    ! Initialise
-    ind = restart_ind
-
 #if OMP0MPI1 == 0
     dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
 #elif OMP0MPI1 == 1
@@ -276,7 +324,7 @@ contains
 
     ! I/O
     if (my_id .eq. (num_procs-1)) then
-      write(6, "(i0, a, "//dp_chr//")") output_dn*ind, "-th step: logPost = ", dof%SlogPost
+      write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof%SlogPost
       flush(6)
       
       call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
@@ -286,11 +334,10 @@ contains
     call set(dof_MAP, dof)
     
     ! Generate random numbers
-    niter = 600
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
-    call randn(stdnRV, (/ 1989, 6, m_solver, Td /))
-    call randu(UniRV, (/ nts, n, 11, 28 /))
+    call randn(stdnRV, (/ 1989*niter, 28*Seed_ID, 11*m_solver, Td*6 /))
+    call randu(UniRV, (/ 4*nts, 26*n, 8*niter, Seed_ID*1991 /))
     
     ! Timer
     call reset(total_timer)
@@ -305,12 +352,15 @@ contains
         call set(dof, dof_old)
         
         ! Proposal
+#if EM_MEAN == 1
+        call propose_dof_EM(dof, canon_SSD, canon_id, stdnRV(RV_ind))
+#else
         call propose_dof_canon(dof, canon_SSD, canon_id, stdnRV(RV_ind))
-        !! Use Eulerian time-average
-        !! call propose_dof_EM(dof, canon_SSD, canon_id, stdnRV(RV_ind))
-        !! End: Use Eulerian time-average
+#endif
         
+#if IBACKWARD == 1
         call reverse_dof_to_dof_inv(dof_inv, dof)
+#endif
         
         ! Evaluate likelihood
 #if OMP0MPI1 == 0
@@ -344,7 +394,7 @@ contains
           ! Accepted
           call set(dof_old, dof)
           dof_old%occurrence = 1
-          accept_counter(canon_id, ntune) = accept_counter(canon_id, ntune) + 1
+          accept_counter(canon_id) = accept_counter(canon_id) + 1
         else
           ! Rejected
           dof_old%occurrence = dof_old%occurrence + 1
@@ -356,27 +406,44 @@ contains
         end if
       end do
       
-      ! I/O
-      if ((my_id .eq. (num_procs-1)) .and. (mod(iter, output_dn) .eq. 0)) then
-        write(6, "(i0, a, "//dp_chr//")") restart_ind*output_dn + iter, "-th step: logPost = ", dof_old%SlogPost
-        FLUSH(6)
-        
-        ind = ind + 1
-        call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+      ind = ind + 1
+      
+      ! Tune
+      if ((Phase .eq. 2) .and. (mod(iter, output_dn) .eq. 0)) then
+        call tune_SSD(canon_SSD, real(accept_counter,kind=dp)/real(output_dn,kind=dp))
+        if (iter .lt. niter) then
+          accept_counter = 0
+        end if
       end if
+      
+      ! I/O
+      if (my_id .eq. (num_procs-1)) then
+        if (mod(iter, 5) .eq. 0) then
+          write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof_old%SlogPost
+          FLUSH(6)
+        end if
+
+        if (mod(iter, output_dn) .eq. 0) then
+          call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+        end if
+      end if
+      
     end do
-    
+      
+    ! I/O
+    if ((my_id .eq. (num_procs-1))) then
+      ! Write MAP
+      call write_theta(dof_MAP, trim(output_fld)//"theta", sc, -1)
+      ! Write SSD
+      call write(canon_SSD, trim(output_fld)//"canon_SSD")
+      
+      ! Write TXT for easy verification
+      call write_txt(real(accept_counter,kind=dp), trim(output_fld)//"accept_counter")
+      call write_txt(canon_SSD, trim(output_fld)//"canon_SSD")
+    end if
     
     ! Timer
     call stop(total_timer)
-    
-    ! I/O
-    if ((my_id .eq. (num_procs-1))) then      
-      ! Write MAP
-      call write_theta(dof_MAP, trim(output_fld)//"theta", sc, -1)
-      call write_txt(accept_counter, trim(output_fld)//"theta_accept_counter")
-      call write_txt(canon_SSD, trim(output_fld)//"theta_canon_SSD")
-    end if
     
     ! Release memory
     ! MH
@@ -390,10 +457,13 @@ contains
     call deallocate(dof_MAP)
 
     call deallocate(dof)
-    call deallocate(dof_inv)
     call deallocate(IndFn)
     call deallocate(jumps)
+    
+#if IBACKWARD == 1
+    call deallocate(dof_inv)
     call deallocate(jumps_inv)
+#endif
 
 #if OMP0MPI1 == 1
     call MPI_FINALIZE(ierr)
@@ -439,13 +509,12 @@ contains
     integer, intent(in) :: Td, layer
 
     type(jumpsdat), dimension(:), allocatable :: jumps
-    type(jumpsdat), dimension(:), allocatable :: jumps_inv
     type(trajdat) :: traj
 
-    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
-    type(dofdat) :: dof, dof_inv, dof_EM, dof_Davis
+    type(dofdat) :: dof, dof_Davis
     type(IndFndat) :: IndFn
 
     real(kind=dp) :: sc, h, dt
@@ -454,9 +523,6 @@ contains
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     real(kind=dp), parameter :: kappa_scale = 10000.0_dp
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
-    
-    integer, parameter :: ntune = 1
-
     
 !    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
 !    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
@@ -522,11 +588,9 @@ contains
     
     ! Allocate array of jumps with initial positions
     call allocate(jumps, mesh)
-    call allocate(jumps_inv, mesh)
     
     ! Convert trajectory into jumps
     call traj2jumps(jumps, traj, mesh)
-    call traj2jumps_inv(jumps_inv, traj, mesh)
     call deallocate(traj)
     
     ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
@@ -545,12 +609,6 @@ contains
     call print_info(IndFn)
     call print_info(h, nts, sc)
 !     call print_info(jumps, mesh)
-    
-    ! MCMC
-    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
-    
-    ! Set reverse psi
-    call reverse_dof_to_dof_inv(dof_inv, dof)
     
     ! Timer
     call reset(total_timer)
@@ -687,11 +745,9 @@ contains
     
     ! Release memory
     call deallocate(dof_solver)
-    call deallocate(dof_inv)
     call deallocate(dof)
     call deallocate(IndFn)
     call deallocate(jumps)
-    call deallocate(jumps_inv)
     
     write(6, "(a)") &
     "! ----------- Passed inference ----------- !"

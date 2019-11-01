@@ -1,4 +1,4 @@
-#define FFTW3 1
+#define FFTW3 0
 module advdiff_field
   use advdiff_precision
   use advdiff_debug
