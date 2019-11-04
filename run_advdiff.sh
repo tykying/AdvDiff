@@ -50,6 +50,7 @@ do
   #./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
   #nohup mpirun -np 32 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
   mpirun -np 4 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
+  echo Finish!
   #./advdiff $Td $layer $NPart $Phase $Seed_ID
 done
 

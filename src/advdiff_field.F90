@@ -172,6 +172,7 @@ contains
     real(kind=dp), intent(in) :: amplitude
     
     call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+    inout = 0.0_dp * real(wavenumber, kind=dp) * amplitude
 #endif
   end subroutine sine_basis
   
@@ -263,6 +264,7 @@ contains
     integer, intent(in) :: Mx, My  ! Factor of scaling up
     
     call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+    out = 0.0_dp * in(1,1) * real(Mx * My, kind=dp)
 #endif
   end subroutine fourier_intpl
 
@@ -332,6 +334,7 @@ contains
     integer, intent(in) :: Mx, My  ! Factor of scaling up
     
     call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+    out = 0.0_dp * in(1,1) * real(Mx*My, kind=dp)
 #endif
   end subroutine cosine_intpl
 
@@ -403,6 +406,7 @@ contains
     integer, intent(in) :: Mx, My  ! Factor of scaling up
     
     call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+    out = 0.0_dp * in(1,1) * real(Mx*My, kind=dp)
 #endif
   end subroutine sine_intpl
   
@@ -456,6 +460,7 @@ contains
     real(kind=dp), dimension(:, :), intent(in) :: in
     
     call abort_handle("No FFTW3 library", __FILE__, __LINE__)
+    out = 0.0_dp * in(1,1)
 #endif
   end subroutine sine_filter
   

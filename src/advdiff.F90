@@ -182,11 +182,11 @@ contains
     !write(fld_tmp, "(a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char)
     
     write(fld_tmp, "(a,a)") trim(path_arg), "/"
-!     write(6, "(a, a)") "New path: ", trim(output_fld)
+!     write(6, "(a, a)") "New path: ", trim(fld_tmp)
     
     if (Phase .eq. 1) then
       niter = 500
-      output_dn = 1
+      output_dn = 100
       restart_ind = 0
       write(input_fld, "(a,a)") trim(fld_tmp), "" 
       write(output_fld, "(a,a)") trim(fld_tmp), "SpinUp/"
