@@ -22,24 +22,34 @@ SECONDS=0
 Td=32
 layer=2
 NPart=676
-for Phase in {2..3}
+for Phase in {1..1}
 do
-  Seed_ID=1
+  Seed_ID=6
   
+  case $HOSTNAME in
+    *"maths.ed.ac.uk")
+      output_prefix=".";;
+    *"ecdf.ed.ac.uk")
+      output_prefix="/exports/eddie/scratch/s1046972"
+  esac
+
+
   # QG
-  output_fld="./output/N4096_D256_I256/QGM2_L"$layer"_NPART"$NPart""
+  output_fld=$output_prefix"/output/N4096_D256_I256/QGM2_L"$layer"_NPART"$NPart
+  echo $output_fld
   
-  # TTG
-  output_fld="./output/N4096_D64_I64/TTG_sinusoidal"
-  Td=30
+  ## TTG
+  #output_fld=$output_prefix"/output/N4096_D64_I64/TTG_sinusoidal"
+  #Td=30
   
   output_dir=$output_fld"/h"$Td"d/Seed"$Seed_ID
   mkdir -p $output_dir"/SpinUp"
   mkdir -p $output_dir"/Tuned"
   mkdir -p $output_dir"/Data"
   mkdir -p $output_dir"/screen"
-  nohup mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID > $output_dir"/screen/Phase"$Phase".txt"
-  #mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID
+  #./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
+  #nohup mpirun -np 32 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
+  mpirun -np 4 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
   #./advdiff $Td $layer $NPart $Phase $Seed_ID
 done
 
@@ -52,6 +62,4 @@ date
 #python ./python/animate_field.py
 
 # Memory debugger
-#valgrind --track-origins=yes --leak-check=full  --show-reachable=yes ./advdiff
-
-
+#valgrind --track-origins=yes --leak-check=full  --show-reachable=yes ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir 

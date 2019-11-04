@@ -58,7 +58,8 @@ module advdiff_inference
   end interface set
   
   interface print_info
-    module procedure print_info_inference, print_info_rescaled, print_info_IndFn
+    module procedure print_info_inference, print_info_rescaled, &
+                      print_info_IndFn, print_info_RV
   end interface print_info
 
 contains
@@ -209,7 +210,7 @@ contains
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
 !    real(kind=dp), parameter :: kappa_scale = 10000.0_dp            ! Layer 1
     real(kind=dp), parameter :: kappa_scale = 0.2_dp*10000.0_dp   ! Layer 2
-    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp  ! Irrelevant
+    real(kind=dp), parameter :: psi_scale = 10.0_dp*1000.0_dp  ! Irrelevant
     
     if (present(sc)) then
       ssc = sc
@@ -219,13 +220,10 @@ contains
     
     ! Initialise dof
     call zeros(dof%psi)
-    call set(dof%K11, 5.0_dp*kappa_scale*ssc)
-    call set(dof%K22, 5.0_dp*kappa_scale*ssc)
-    call set(dof%K12, 0.0_dp*kappa_scale*ssc)
-
     call set(dof%K11, 0.5_dp*kappa_scale*ssc)
     call set(dof%K22, 0.5_dp*kappa_scale*ssc)
-    
+    call set(dof%K12, 0.0_dp*kappa_scale*ssc)
+
     call imprint_canon(dof)
     
   end subroutine init_dof
@@ -1112,5 +1110,14 @@ contains
 
     FLUSH(6)
   end subroutine print_info_rescaled
+  
+  subroutine print_info_RV(RV)
+    real(kind = dp), dimension(:), intent(in) :: RV
+    
+    write(6, "(a,"//sp_chr//")") "|  E(X) = ", sum(RV)/size(RV, 1)
+    write(6, "(a,"//sp_chr//")") "|  Var(X) = ", sum(RV**2)/size(RV, 1)-(sum(RV)/size(RV, 1))**2
+    
+    FLUSH(6)
+  end subroutine print_info_RV
 
 end module advdiff_inference

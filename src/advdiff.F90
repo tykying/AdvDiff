@@ -15,11 +15,12 @@ program advdiff
 
   character(len=32) :: arg
   integer :: Td, layer, NPart, Phase, Seed_ID
+  character(len=128) :: path_arg
   
   ! Main program
   if (command_argument_count() > 0) then
-    write(6, "(a)") &
-      "! ----------- Reading Command Line Arguments ----------- !"      
+!     write(6, "(a)") &
+!       "! ----------- Reading Command Line Arguments ----------- !"      
     call get_command_argument(1, arg)
     READ(arg,*) Td     ! cast string into integer
   
@@ -35,14 +36,16 @@ program advdiff
     call get_command_argument(5, arg)
     READ(arg,*) Seed_ID
     
-    write(6, "(a, i0, a, i0, a, i0, a, i0, a, i0)") " SampInt = ", Td, &
-              & "d; Layer = ", layer, "; NPart = ", NPart, "; Phase = ", Phase, & 
-              & "; Seed_ID = ", Seed_ID
+    call get_command_argument(6, path_arg)
+    
+!     write(6, "(a, i0, a, i0, a, i0, a, i0, a, i0)") " SampInt = ", Td, &
+!               & "d; Layer = ", layer, "; NPart = ", NPart, "; Phase = ", Phase, & 
+!               & "; Seed_ID = ", Seed_ID
   else
     call abort_handle("Invalid input to the programme", __FILE__, __LINE__)
   end if
   
-  call inference(Td, layer, NPart, Phase, Seed_ID)
+  call inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
   !call unittest()
 
 contains
@@ -77,13 +80,14 @@ contains
 #define IBACKWARD 0
 #define EM_MEAN 0
 
-  subroutine inference(Td, layer, NPart, Phase, Seed_ID)
+  subroutine inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
 #if OMP0MPI1 == 0
     use omp_lib
 #elif OMP0MPI1 == 1
     use mpi
 #endif
     integer, intent(in) :: Td, layer, NPart, Phase, Seed_ID
+    character(len=128), intent(in) :: path_arg
     
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
@@ -103,9 +107,6 @@ contains
     integer :: nts
     
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
-    
     integer, dimension(:), allocatable :: accept_counter
     real(kind=dp), dimension(:), allocatable :: canon_SSD
     
@@ -115,7 +116,7 @@ contains
 
     character(len = 128) :: RunProfile
     character(len = 256) :: output_fld, Td_char, resol_param
-    character(len = 256) :: input_fld
+    character(len = 256) :: input_fld, fld_tmp
     
     ! Timer
     type(timer), save :: total_timer
@@ -139,57 +140,68 @@ contains
     ! MPI
     integer :: my_id, num_procs
 #if OMP0MPI1 == 1
-    integer :: ierr, PROVIDED
+    integer :: ierr !, PROVIDED, !! PROVIDED: For MPI-OpenMP
     real(kind=dp) :: SlogPost_local
     real(kind=dp) :: SlogPost_global = 0.0_dp
 #endif
     
     ! m, n: DOF/control
-    m = 16
-    n = 16
-    ! m_solver: solver grid
-    m_solver = 64
-    ! m_Ind, n_Ind: indicator functions
-    m_Ind = 16
-    n_Ind = m_Ind
-    write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
-    
-    m = 8
-    n = 8
-    ! m_solver: solver grid
-    m_solver = 64
-    ! m_Ind, n_Ind: indicator functions
-    m_Ind = 8
-    n_Ind = m_Ind
-    write(RunProfile, "(a)") "TTG_sinusoidal"
+    if (index(path_arg, "QGM2") .gt. 0) then
+      write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
+      m = 16
+      n = 16
+      ! m_solver: solver grid
+      m_solver = 64
+      ! m_Ind, n_Ind: indicator functions
+      m_Ind = 16
+      n_Ind = m_Ind
+    elseif (index(path_arg, "TTG_sinusoidal") .gt. 0) then
+      write(RunProfile, "(a)") "TTG_sinusoidal"
+      m = 8
+      n = 8
+      ! m_solver: solver grid
+      m_solver = 64
+      ! m_Ind, n_Ind: indicator functions
+      m_Ind = 8
+      n_Ind = m_Ind
+    else
+      ! Debug mode
+      m = 2
+      n = 2
+      ! m_solver: solver grid
+      m_solver = 8
+      ! m_Ind, n_Ind: indicator functions
+      m_Ind = 2
+      n_Ind = m_Ind
+      
+      call abort_handle("Invalid path", __FILE__, __LINE__)
+    end if
 
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
-    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
-    !write(output_fld, "(a,a,a,a,a,a,a)") "/exports/eddie/scratch/s1046972/output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
-
-    write(output_fld, "(a,a,i0,a)") trim(output_fld), "Seed", Seed_ID, "/"
+    !write(fld_tmp, "(a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char)
     
-    write(6, *) trim(output_fld)
+    write(fld_tmp, "(a,a)") trim(path_arg), "/"
+!     write(6, "(a, a)") "New path: ", trim(output_fld)
     
     if (Phase .eq. 1) then
       niter = 500
-      output_dn = 100
+      output_dn = 1
       restart_ind = 0
-      write(input_fld, "(a,a)") trim(output_fld), "" 
-      write(output_fld, "(a,a)") trim(output_fld), "SpinUp/"
+      write(input_fld, "(a,a)") trim(fld_tmp), "" 
+      write(output_fld, "(a,a)") trim(fld_tmp), "SpinUp/"
     elseif (Phase .eq. 2) then
       niter = 500
       output_dn = 100
       restart_ind = -1
-      write(input_fld, "(a,a)") trim(output_fld), "SpinUp/" 
-      write(output_fld, "(a,a)") trim(output_fld), "Tuned/"
+      write(input_fld, "(a,a)") trim(fld_tmp), "SpinUp/" 
+      write(output_fld, "(a,a)") trim(fld_tmp), "Tuned/"
     elseif (Phase .eq. 3) then
       niter = 800
       output_dn = 1
       restart_ind = -1
-      write(input_fld, "(a,a)") trim(output_fld), "Tuned/" 
-      write(output_fld, "(a,a)") trim(output_fld), "Data/"
+      write(input_fld, "(a,a)") trim(fld_tmp), "Tuned/" 
+      write(output_fld, "(a,a)") trim(fld_tmp), "Data/"
     end if
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
@@ -198,8 +210,7 @@ contains
     my_id = 0
     num_procs = 1
     
-    call omp_set_num_threads(16);
-
+    !call omp_set_num_threads(16);
     call allocate(IndFn, m_Ind, n_Ind)
 #elif OMP0MPI1 == 1
     call MPI_INIT( ierr )
@@ -209,7 +220,13 @@ contains
     !call omp_set_num_threads(16/num_procs);
     !write(6, "(a,i0,a,i0)") " #run = ", num_procs, "; each with #threads = ", 16/num_procs
     call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
     call MPI_COMM_SIZE(MPI_COMM_WORLD, num_procs, ierr)
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
     
     call allocate(IndFn, m_Ind, n_Ind, my_id, num_procs)
 #endif
@@ -261,21 +278,8 @@ contains
     h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
 
     ! Calculate nts = number of timesteps needed in solving FP
-    dt = 12.0_dp*3600.0_dp  ! 12 hours, in seconds
-    nts = int((h/sc)/dt)    ! 12 hours time step
-
-    ! Print info to screen
-    if (my_id .eq. (num_procs-1)) then
-      write(6, "(a, a)") "Output path: ", trim(output_fld)
-      call print_info(mesh)
-      call print_info(dof)
-      call print_info(IndFn)
-      call print_info(h, nts, sc)
-
-      flush(6)
-    end if
-    
-!     call print_info(jumps, mesh)
+    dt = 6.0_dp*3600.0_dp  ! 6 hours, in seconds
+    nts = int((h/sc)/dt)
     
 !   likelihood for each indicator function
     allocate(accept_counter(dof%ndof))
@@ -284,7 +288,6 @@ contains
     ! MCMC
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
-    
 #if IBACKWARD == 1
     call allocate(jumps_inv, mesh)
     call traj2jumps_inv(jumps_inv, traj, mesh)
@@ -318,17 +321,12 @@ contains
     SlogPost_global = 0.0_dp
     call MPI_AllReduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
              MPI_COMM_WORLD, ierr)
-        
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
+    
     dof%SlogPost = SlogPost_global
 #endif
-
-    ! I/O
-    if (my_id .eq. (num_procs-1)) then
-      write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof%SlogPost
-      flush(6)
-      
-      call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
-    end if
 
     call set(dof_old, dof)
     call set(dof_MAP, dof)
@@ -336,8 +334,31 @@ contains
     ! Generate random numbers
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
-    call randn(stdnRV, (/ 1989*niter, 28*Seed_ID, 11*m_solver, Td*6 /))
-    call randu(UniRV, (/ 4*nts, 26*n, 8*niter, Seed_ID*1991 /))
+    ! Seed must lie in (0, 4095), last entry must be odd
+    call randn(stdnRV, (/ mod(1989*Seed_ID, 4096), mod(28*Seed_ID, 4096), &
+                        & mod(11*m_solver, 4096), mod(Td*6*Phase, 4096)+1 /))
+    call randu(UniRV, (/ mod(nts*(4+Phase), 4096), mod(26*n, 4096), &
+                        & mod(8*niter, 4096), mod(8*Seed_ID*1991, 4096)+1 /))
+    
+    ! I/O
+    if (my_id .eq. (num_procs-1)) then
+      write(6, "(a, a)") "Output path: ", trim(output_fld)
+      
+      call print_info(mesh)
+      call print_info(dof)
+      call print_info(IndFn)
+      call print_info(h, nts, sc)
+!     call print_info(jumps, mesh)
+      write(6, "(a)") " Normal RV samples: "
+      call print_info(stdnRV)
+      write(6, "(a)") " Uniform RV samples: "
+      call print_info(UniRV)
+      
+      write(6, "(i0, a, "//dp_chr//")") ind, "-th step: logPost = ", dof_old%SlogPost
+      FLUSH(6)
+      
+      call write_theta(dof_old, trim(output_fld)//"theta", sc, ind)
+    end if
     
     ! Timer
     call reset(total_timer)
@@ -348,7 +369,6 @@ contains
       do canon_id = 1, dof%ndof
         RV_ind = (iter-1)*dof%ndof + canon_id
         
-        ! Initialise K_prop
         call set(dof, dof_old)
         
         ! Proposal
@@ -371,6 +391,9 @@ contains
         SlogPost_global = 0.0_dp
         call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
                  (num_procs-1), MPI_COMM_WORLD, ierr)
+        if (ierr .ne. MPI_SUCCESS) then 
+          call abort_handle("MPI Failed", __FILE__, __LINE__) 
+        end if
         
         dof%SlogPost = SlogPost_global
 #endif
@@ -378,7 +401,7 @@ contains
         ! Metropolis-Hastings
         if (my_id .eq. (num_procs-1)) then
           alphaUniRV = dexp(dof%SlogPost - dof_old%SlogPost)
-        
+          
           if (UniRV(RV_ind) .lt. alphaUniRV) then
             accepted = 1
           else
@@ -388,6 +411,9 @@ contains
 
 #if OMP0MPI1 == 1
         call MPI_Bcast(accepted, 1, MPI_INT, (num_procs-1), MPI_COMM_WORLD,  ierr)
+        if (ierr .ne. MPI_SUCCESS) then 
+          call abort_handle("MPI Failed", __FILE__, __LINE__) 
+        end if
 #endif
         
         if (accepted .eq. 1) then
@@ -521,12 +547,7 @@ contains
     integer :: nts
     
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     
-!    character(len = *), parameter :: RunProfile = "TTG_sinusoidal"
-!    character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
-!    character(len=*), parameter :: RunProfile = "QGM2_L2_NPART676"
     character(len=256) :: RunProfile
     character(len=256) :: output_fld, Td_char, resol_param
 

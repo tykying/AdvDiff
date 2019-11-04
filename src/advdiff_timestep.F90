@@ -35,32 +35,6 @@ contains
     CFL = u_max*dt/dx
 
   end function CFL
-
-  subroutine assemble_FG_DCU(F,G, q, uv_fld)
-    real(kind=dp), dimension(:,:), intent(out) :: F,G
-    type(field), intent(in) :: q
-    type(uv_signed), intent(in) :: uv_fld
-
-    integer :: gl
-    real(kind = dp), dimension(:, :), pointer :: lq, lup, lum, lvp, lvm
-
-    lq => q%data
-    lup => uv_fld%up
-    lum => uv_fld%um
-    lvp => uv_fld%vp
-    lvm => uv_fld%vm
-
-    if (q%glayer .ne. 1) then
-      call abort_handle("ghost layer not equal 1", __FILE__, __LINE__)
-    else
-      gl = q%glayer
-    end if
-
-    !#TODO: embarrassingly parallel between F and G
-    call assemble_F_DCU(F, q, lup, lum)
-    call assemble_G_DCU(G, q, lvp, lvm)
-
-  end subroutine assemble_FG_DCU
   
   subroutine assemble_F_DCU(F, q, lup, lum)
     real(kind=dp), dimension(:,:), intent(out) :: F

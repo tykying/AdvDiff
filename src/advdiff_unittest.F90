@@ -1247,10 +1247,10 @@ contains
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
 
-    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
-    type(dofdat) :: dof, dof_MAP, dof_old, dof_SSD
+    type(dofdat) :: dof, dof_old
     type(IndFndat) :: IndFn
 
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
@@ -1258,10 +1258,7 @@ contains
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     real(kind=dp) :: sc, h, dt
     integer :: nts, dt_rf
-    real(kind=dp), dimension(:), allocatable :: logPost, logPost_old
-
-    integer :: dof_id
-    integer :: iter, ind
+    real(kind=dp), dimension(:), allocatable :: logPost
 
     integer, parameter :: Td = 32
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
@@ -1270,13 +1267,9 @@ contains
 
     type(dofdat) :: dof_solver, dof_solver_inv
     type(field) :: q
-    real(kind=dp) :: lik
     integer, dimension(:), allocatable :: klist
     integer :: INDk, i, k
     
-    real(kind=dp) :: SlogPost, SlogPostr, alphaUniRV
-    
-    real(kind=dp), dimension(:,:), allocatable :: dJdm, dJdm_abs
     real(kind=dp), dimension(:), allocatable :: theta, theta_old
     
     integer, dimension(6) :: INDk_list
@@ -1414,33 +1407,6 @@ contains
     deallocate(theta_old)
     deallocate(theta)
 
-!     ! Test dJdm
-!     allocate(theta(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
-!     allocate(theta_old(dof%m_psi*dof%n_psi+3*dof%m_K*dof%n_K))
-!     allocate(logPost(IndFn%nIND))
-!     allocate(logPost_old(IndFn%nIND))
-!     
-!     call read_theta(dof_old, trim(output_fld)//"theta_sine", sc, 119)
-!     
-!     call convert_dof_to_theta(theta, dof, 1.0_dp)
-!     call convert_dof_to_theta(theta_old, dof_old, 1.0_dp)
-!     
-!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-!     call evaluate_loglik_OMP(logPost_old, jumps, IndFn, mesh, dof_old, h, nts)
-!     
-!     allocate(dJdm(size(logPost,1), size(theta, 1)))
-!     
-!     call compute_dJdm(dJdm, logPost, logPost_old, theta, theta_old)
-!     
-!     call print_array(dJdm, 'dJdm')
-!     
-!     deallocate(dJdm)
-!     deallocate(theta)
-!     deallocate(theta_old)
-!     call deallocate(dof_old)
-!     deallocate(logPost)
-!     deallocate(logPost_old)
-!     ! End Test dJdm
 
     ! Evaluate likelihood
     allocate(logPost(IndFn%nIND))
@@ -1495,10 +1461,10 @@ contains
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
 
-    integer :: m, n, cell, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_solver, m_Ind, n_Ind
     type(meshdat) :: mesh
 
-    type(dofdat) :: dof, dof_MAP, dof_old
+    type(dofdat) :: dof
     type(IndFndat) :: IndFn
 
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
@@ -1506,19 +1472,14 @@ contains
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     real(kind=dp) :: sc, h, dt
     integer :: nts
-    real(kind=dp), dimension(:), allocatable :: logPost, canon_SSD
-    real(kind=dp) :: logPrior
-    
-    integer :: canon_id
-    integer :: iter, niter, ind
-    real(kind=dp) :: alphaUniRV
-    real(kind=dp), dimension(1) :: UniRV
 
     integer, parameter :: Td = 1
     character(len = *), parameter :: RunProfile = "zero_const"
     character(len = 256) :: output_fld, Td_char, resol_param
 
     ! Extra variables
+    integer :: niter = 500
+    real(kind=dp), dimension(:), allocatable :: stdnRV_a, stdnRV_kappa
     type(dofdat) :: dof_solver  ! Refined dof for solver
     real(kind=dp) :: kappa, a16, logLik
     real(kind=dp) :: kappa_old, a16_old, logLik_old
@@ -1582,7 +1543,6 @@ contains
     
     call allocate(dof_solver, mesh)
     
-    
     ! Look for a MLE by random walk
     wavenumber = 16
     
@@ -1590,45 +1550,50 @@ contains
     kappa_old = 100.0_dp * L *sc/100.0_dp
     kappa_old = 1.0_dp * L *sc/100.0_dp
     
-!     call set(dof_solver%psi, 0.0_dp)
-!     call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
-!       
-!     call set(dof_solver%K11, kappa)
-!     call set(dof_solver%K22, kappa)
-!     call set(dof_solver%K12, 0.0_dp)
-!     
-!     logLik_old = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-! 
-!     do k = 1, 500
-!       a16 = a16_old*(1.0_dp + 0.1_dp*randn())
-!       kappa = kappa_old*(1.0_dp + 0.1_dp*randn())
-!     
-!       ! Only need to pass the interior points
-!       call set(dof_solver%psi, 0.0_dp)
-!       call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
-!       
-!       call set(dof_solver%K11, kappa)
-!       call set(dof_solver%K22, kappa)
-!       call set(dof_solver%K12, 0.0_dp)
-!       
-!       logLik = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-!       
-! !       write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
-! !           "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
-! !       write(6, *) trim(scrstr)
-!       
-!       if (logLik .gt. logLik_old) then
-!         a16_old = a16
-!         kappa_old = kappa
-!         logLik_old = logLik
-!         
-!         
-!         write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
+    call set(dof_solver%psi, 0.0_dp)
+    call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
+      
+    call set(dof_solver%K11, kappa)
+    call set(dof_solver%K22, kappa)
+    call set(dof_solver%K12, 0.0_dp)
+    
+    logLik_old = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+
+    allocate(stdnRV_a(niter))
+    allocate(stdnRV_kappa(niter))
+    call randn(stdnRV_a)
+    call randn(stdnRV_kappa)
+    
+    do k = 1, niter
+      a16 = a16_old*(1.0_dp + 0.1_dp*stdnRV_a(k))
+      kappa = kappa_old*(1.0_dp + 0.1_dp*stdnRV_kappa(k))
+    
+      ! Only need to pass the interior points
+      call set(dof_solver%psi, 0.0_dp)
+      call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
+      
+      call set(dof_solver%K11, kappa)
+      call set(dof_solver%K22, kappa)
+      call set(dof_solver%K12, 0.0_dp)
+      
+      logLik = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
+      
+!       write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
 !           "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
-!         write(6, *) trim(scrstr)
-!         flush(6)
-!       end if
-!     end do
+!       write(6, *) trim(scrstr)
+      
+      if (logLik .gt. logLik_old) then
+        a16_old = a16
+        kappa_old = kappa
+        logLik_old = logLik
+        
+        
+        write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
+          "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
+        write(6, *) trim(scrstr)
+        flush(6)
+      end if
+    end do
     
     
     !! Output video for MLE
@@ -1648,7 +1613,7 @@ contains
 
     call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
 
-    call initialise_q_Gaussian(q, mesh)
+    call initialise_q_Gaussian(q)
     call imposeBC(q)
     
     write(output_q, "(a)") "./unittest/cellular/q"
@@ -1664,8 +1629,8 @@ contains
     end do
     
     call deallocate(q)
-    
-    stop
+    deallocate(stdnRV_a)
+    deallocate(stdnRV_kappa)
     
     write(6, "(a)") "a16, kappa, logLik"
     
@@ -1714,7 +1679,7 @@ contains
     type(field) :: q
     integer :: jump
     real(kind=dp) :: lik
-    integer :: k_i, i
+    integer :: k_i
 
     eval_Gaussian_loglik = 0.0_dp
 
@@ -1722,7 +1687,7 @@ contains
     call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
     
     ! Solve FK equation
-    call initialise_q_Gaussian(q, mesh)
+    call initialise_q_Gaussian(q)
     call imposeBC(q)
     call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
     
@@ -1741,9 +1706,8 @@ contains
     
   end function eval_Gaussian_loglik
   
-  subroutine initialise_q_Gaussian(q, mesh)
+  subroutine initialise_q_Gaussian(q)
     type(field), intent(inout) :: q
-    type(meshdat), intent(in) :: mesh
     
     integer :: i, j, gl
     real(kind=dp) :: x, y, Sigma0
