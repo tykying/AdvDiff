@@ -2,7 +2,6 @@ program advdiff
   use advdiff_precision
   use advdiff_debug
   use advdiff_timing
-  use advdiff_parameters
   use advdiff_io
   use advdiff_field
   use advdiff_timestep
@@ -17,6 +16,7 @@ program advdiff
   integer :: Td, layer, NPart, Phase, Seed_ID
   character(len=128) :: path_arg
   
+#if 0
   ! Main program
   if (command_argument_count() > 0) then
 !     write(6, "(a)") &
@@ -46,7 +46,8 @@ program advdiff
   end if
   
   call inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
-  !call unittest()
+#endif
+  call unittest()
 
 contains
 
@@ -76,7 +77,7 @@ contains
     write(6, *) "!!! ----------- Validation finished ----------- !!!"
   end subroutine validation
   
-#define OMP0MPI1 1
+#include "advdiff_configuration.h"
 #define IBACKWARD 0
 #define EM_MEAN 0
 
@@ -144,6 +145,8 @@ contains
     real(kind=dp) :: SlogPost_local
     real(kind=dp) :: SlogPost_global = 0.0_dp
 #endif
+
+    integer, dimension(4) :: SEED
     
     ! m, n: DOF/control
     if (index(path_arg, "QGM2") .gt. 0) then
@@ -197,7 +200,7 @@ contains
       write(input_fld, "(a,a)") trim(fld_tmp), "SpinUp/" 
       write(output_fld, "(a,a)") trim(fld_tmp), "Tuned/"
     elseif (Phase .eq. 3) then
-      niter = 800
+      niter = 1000
       output_dn = 1
       restart_ind = -1
       write(input_fld, "(a,a)") trim(fld_tmp), "Tuned/" 
@@ -335,10 +338,10 @@ contains
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     ! Seed must lie in (0, 4095), last entry must be odd
-    call randn(stdnRV, (/ mod(1989*Seed_ID, 4096), mod(28*Seed_ID, 4096), &
-                        & mod(11*m_solver, 4096), mod(Td*6*Phase, 4096)+1 /))
-    call randu(UniRV, (/ mod(nts*(4+Phase), 4096), mod(26*n, 4096), &
-                        & mod(8*niter, 4096), mod(8*Seed_ID*1991, 4096)+1 /))
+    SEED = (/ mod(1989*Seed_ID, 4096), mod(28*Seed_ID, 4096), &
+            & mod(11*m_solver, 4096), mod(Td*6*Phase, 4096)+1 /)
+    call randn(stdnRV, SEED)
+    call randu(UniRV, SEED)
     
     ! I/O
     if (my_id .eq. (num_procs-1)) then

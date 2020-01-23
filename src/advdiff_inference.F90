@@ -2,7 +2,6 @@ module advdiff_inference
   use advdiff_precision
   use advdiff_debug
   use advdiff_timing
-  use advdiff_parameters
   use advdiff_field
   use advdiff_timestep
   use advdiff_trajdata
@@ -841,7 +840,7 @@ contains
     
     prior_param%rel_absmax = 1D-4 / sc
     
-    prior_param%sigma_max = 1D8 * sc
+    prior_param%sigma_max = 1D5 * sc
     prior_param%sigma_min = 1D-2 * sc
     
   end subroutine allocate_prior_param

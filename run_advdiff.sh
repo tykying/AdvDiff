@@ -19,12 +19,12 @@ make
 date
 SECONDS=0
 
-Td=32
+Td=48
 layer=2
 NPart=676
-for Phase in {1..1}
+for Phase in {2..2}
 do
-  Seed_ID=6
+  Seed_ID=1
   
   case $HOSTNAME in
     *"maths.ed.ac.uk")
@@ -48,8 +48,8 @@ do
   mkdir -p $output_dir"/Data"
   mkdir -p $output_dir"/screen"
   #./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
-  #nohup mpirun -np 32 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
-  mpirun -np 4 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
+  nohup mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
+  #mpirun -np 10 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
   echo Finish!
   #./advdiff $Td $layer $NPart $Phase $Seed_ID
 done

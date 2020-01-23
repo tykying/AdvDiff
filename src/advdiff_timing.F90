@@ -1,8 +1,11 @@
+#include "advdiff_configuration.h"
+
 module advdiff_timing
-#define OMP0MPI1 1
 
   use advdiff_precision
+#if OMP0MPI1 == 0
   use omp_lib
+#endif
 
   implicit none
 

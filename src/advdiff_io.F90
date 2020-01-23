@@ -3,7 +3,6 @@ module advdiff_io
   use advdiff_precision
   use advdiff_debug
   use advdiff_timing
-  use advdiff_parameters, only : input_unit, output_unit
   use advdiff_field
   use advdiff_trajdata
   use advdiff_inference
@@ -34,6 +33,9 @@ module advdiff_io
 
   type(timer), save :: write_field_timer
   public :: reset_io_timers, print_io_timers, write_theta
+
+  integer, parameter :: input_unit = 10, output_unit = 11
+  public :: input_unit, output_unit
 
 contains
 

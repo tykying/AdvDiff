@@ -1,5 +1,10 @@
+#include "advdiff_configuration.h"
+
 module advdiff_debug
   use advdiff_precision
+#if OMP0MPI1 == 1
+  use mpi
+#endif
 
   implicit none
 
@@ -8,7 +13,6 @@ module advdiff_debug
   public :: abort_handle
   public :: print_array
   
-    ! Interface: allowing overloading the 'write' function by the parameters input
   interface print_array
     module procedure print_array_2D, print_array_1D
   end interface print_array
@@ -20,8 +24,14 @@ contains
     character(len = *), intent(in) :: file
     integer, intent(in) :: line
 
+    integer :: ierr
+
     write(0, "(a,a,a,i0,a,a)") "ERROR on line ", trim(file), ":", line, ": ", &
       & trim(msg)
+    flush(0)
+#if OMP0MPI1 == 1
+    call MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER, ierr)
+#endif
     stop 1
     
   end subroutine abort_handle
@@ -29,7 +39,7 @@ contains
   subroutine print_array_2D(array, array_name)
     real(kind=dp), dimension(:,:), intent(in) :: array
     character(len = *), optional, intent(in) :: array_name
-    character(len = 16) :: collen
+    character(len = 20) :: collen
     integer :: i
     
     write(collen, "(i0)") size(array, 2)
@@ -41,7 +51,7 @@ contains
     end if
 
     do i = 1, size(array, 1)
-      write(6, "("//collen//""//sp_chr//")") array(i, :)
+      write(6, "("//trim(collen)//sp_chr//")") array(i, :)
     end do
     
   end subroutine print_array_2D
@@ -49,7 +59,7 @@ contains
   subroutine print_array_1D(array, array_name)
     real(kind=dp), dimension(:), intent(in) :: array
     character(len = *), optional, intent(in) :: array_name
-    character(len = 16) :: collen
+    character(len = 20) :: collen
     
     write(collen, "(i0)") size(array, 1)
     
@@ -59,7 +69,7 @@ contains
       write(6, "(i0, a, i0)") size(array, 1), " by ", 1
     end if
 
-    write(6, "("//collen//""//sp_chr//")") array(:)
+    write(6, "("//trim(collen)//sp_chr//")") array(:)
     
   end subroutine print_array_1D
 

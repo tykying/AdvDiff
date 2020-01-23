@@ -2,7 +2,6 @@ module advdiff_unittest
   use advdiff_precision
   use advdiff_debug
   use advdiff_timing
-  use advdiff_parameters
   use advdiff_io
   use advdiff_field
   use advdiff_timestep
@@ -16,6 +15,8 @@ module advdiff_unittest
   public :: unittest_fftw, unittest_solver_timing, unittest_solver_convergence
   public :: unittest_IO, unittest_timer
   public :: unittest_FPsolver_INPUT, unittest_TG_instability
+  
+  integer, dimension(4) :: SEED = (/ 1989, 6, 11, 28 /)
 
 contains
   subroutine unittest_comptools()
@@ -69,7 +70,7 @@ contains
     gamma = 0.0_dp
     
     allocate(stdnRV(n))
-    call randn(stdnRV)
+    call randn(stdnRV, SEED)
     
     do i = 1, n
       sample = mean + stdv * stdnRV(i)
@@ -107,7 +108,7 @@ contains
     gamma = 0.0_dp
     
     allocate(UniRV(n))
-    call randu(UniRV)
+    call randu(UniRV, SEED)
     
     do i = 1, n
       sample = UniRV(i)
@@ -962,7 +963,7 @@ contains
     real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
    
     type(field) :: q_steady, q_err
-    real(kind=dp) :: err_int
+    real(kind=dp) :: err_int, dt
     
     nts = 512*m
     n = m
@@ -1037,7 +1038,7 @@ contains
     real(kind=dp), parameter :: T = 4.0_dp* datan (1.0_dp)
    
     type(field) :: q_exact, q_err
-    real(kind=dp) :: t_i, err_int, err_sup
+    real(kind=dp) :: t_i, err_int, err_sup, dt
     
     n = m
     call allocate(q, m, n, 'q', glayer=gl, type_id=2)
@@ -1561,8 +1562,8 @@ contains
 
     allocate(stdnRV_a(niter))
     allocate(stdnRV_kappa(niter))
-    call randn(stdnRV_a)
-    call randn(stdnRV_kappa)
+    call randn(stdnRV_a, SEED)
+    call randn(stdnRV_kappa, SEED)
     
     do k = 1, niter
       a16 = a16_old*(1.0_dp + 0.1_dp*stdnRV_a(k))

@@ -12,7 +12,6 @@ contains
   pure integer function ij2k(i,j,m)
     integer, intent(in) :: i, j
     integer, intent(in) :: m  ! dim = [m, n]
-    ! n is irrelevant
 
     ij2k = (j-1)*m + i
   end function ij2k
@@ -20,7 +19,6 @@ contains
   pure integer function k2i(k,m)
     integer, intent(in) :: k
     integer, intent(in) :: m  ! dim = [m, n]
-    ! n is irrelevant
 
     k2i = mod(k-1, m) + 1
   end function k2i
@@ -28,7 +26,6 @@ contains
   pure integer function k2j(k,m)
     integer, intent(in) :: k
     integer, intent(in) :: m  ! dim = [m, n]
-    ! n is irrelevant
 
     k2j = (k-1)/ m + 1
   end function k2j
@@ -38,36 +35,22 @@ contains
   ! Source: http://www.netlib.org/lapack/explore-html/df/dd1/group___o_t_h_e_rauxiliary_ga77e05a87ced667cbdb502aa87c72d056.html
 !   ! Alternative: Box-muller transform
 !   ! Source: https://sukhbinder.wordpress.com/fortran-random-number-generation/
-  subroutine randn(x, ISEED)
+  subroutine randn(x, SEED)
     real(kind = dp), dimension(:), intent(out) :: x
     integer, parameter ::  IDIST = 3        ! Standard normal
-    integer, dimension(4), optional, intent(in) :: ISEED
-
-    integer, dimension(4) :: SEED
-
-    if (present(ISEED)) then
-      SEED = ISEED
-    else
-      SEED = (/ 1989, 6, 11, 28 /)
-    end if
+    integer, dimension(4), intent(inout) :: SEED
     
+    x = 0.0_dp  ! In case LAPACK reads from x
     call dlarnv(IDIST, SEED, size(x,1), x)
     
   end subroutine randn
   
-  subroutine randu(x, ISEED)
+  subroutine randu(x, SEED)
     real(kind = dp), dimension(:), intent(out) :: x
     integer, parameter ::  IDIST = 1        ! Uniform on [0,1]
-    integer, dimension(4), optional, intent(in) :: ISEED
-
-    integer, dimension(4) :: SEED
-
-    if (present(ISEED)) then
-      SEED = ISEED
-    else
-      SEED = (/ 26, 8, 4, 1991 /)
-    end if
+    integer, dimension(4), intent(inout) :: SEED
     
+    x = 0.0_dp  ! In case LAPACK reads from x
     call dlarnv(IDIST, SEED, size(x,1), x)
     
   end subroutine randu
