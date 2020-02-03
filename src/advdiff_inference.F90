@@ -15,7 +15,6 @@ module advdiff_inference
   public :: validate_IndFn
   public :: eval_INDk_loglik
   public :: reverse_dof_to_dof_inv
-  public :: compute_dJdm_Cid
   public :: convert_dof_to_theta, convert_theta_to_dof
   public :: convert_dof_to_canon, convert_canon_to_dof
   public :: propose_dof_canon, propose_dof_EM
@@ -39,7 +38,6 @@ module advdiff_inference
   end type IndFndat
   
   type priordat
-    real(kind=dp) :: rel_absmax
     real(kind=dp) :: sigma_min, sigma_max
   end type priordat
 
@@ -389,16 +387,7 @@ contains
     call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', glayer=0, type_id=1)
     call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', glayer=0, type_id=1)
 
-!    !! Rest: to be assigned when interpolated
-!     dof_solver%m_psi = mesh%m
-!     dof_solver%n_psi = mesh%n
-!     dof_solver%m_K = mesh%m
-!     dof_solver%n_K = mesh%n
-!     dof_solver%ndof = 0
-!     dof_solver%occurrence = 0
-!     dof_solver%SlogPost = 0.0_dp
-!     allocate(dof_solver%canon(1))
-!     dof_solver%canon(1) = 0.0_dp
+    ! Other data members: to be assigned when interpolated
     
   end subroutine allocate_dof_solver
   
@@ -411,12 +400,6 @@ contains
     integer :: m, n, Mx, My
     real(kind=dp), dimension(:, :), allocatable :: fldij ! Bilinear intepolation
     
-#define UNSTRUC_GRID 0
-
-#if UNSTRUC_GRID == 1
-    integer, dimension(:), allocatable :: xind, yind
-    integer :: i, j, k
-#endif
 
     ! Quantities other than the field: same as dof
     dof_solver%m_psi = dof%m_psi
@@ -433,30 +416,20 @@ contains
     
     ! fldij(i, j) = field(x_i, y_j) on computational domain
     ! DOF: can be coarse field(x_i, y_j), Fourier coefficients or anything
-    ! dof_to_fldij: an interface from DOF to fld(i,j)
     
     ! Streamfunction: psi
+#if EM_MEAN == 1
+     dof_solver%psi%data = 0.0_dp
+     dof_solver%psi%data(2:size(dof_solver%psi%data,1)-1, &
+                         2:size(dof_solver%psi%data,2)-1) = dof%psi%data
+#else
     ! N.B. DOF%psi = non-bondary values, assumed boundary value = 0
     m = dof%psi%m  ! = 15
     n = dof%psi%n
 
-!     ! Fourier intepolation
-!     allocate(fldij(m+1, n+1))
-!     fldij = 0.0_dp  ! Boundary condition for stream function
-!     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-!     
-!     Mx = mesh%m/(m+1)
-!     My = mesh%n/(n+1)
-!     ! Assumed periodic(= 0) at first and final row/column
-!     call fourier_intpl(dof_solver%psi%data(1:mesh%m, 1:mesh%n), fldij, Mx, My)
-!     dof_solver%psi%data(mesh%m+1, :) = dof_solver%psi%data(1, :)  ! Impose periodicity
-!     dof_solver%psi%data(:, mesh%n+1) = dof_solver%psi%data(:, 1)  ! Impose periodicity
-! 
-!     deallocate(fldij)
-
-!     ! Bilinear intepolation
+!   ! Bilinear intepolation
     allocate(fldij(m+2, n+2))
-    fldij = 0.0_dp  ! Boundary condition for stream function
+    fldij = 0.0_dp  ! Boundary condition for streamfunction
     fldij(2:(m+1), 2:(n+1)) = dof%psi%data
    
     Mx = mesh%m/(m+1)
@@ -464,71 +437,7 @@ contains
     ! Assumed periodic(= 0) at first and final row/column
     call bilinear_intpl(dof_solver%psi%data, fldij, Mx, My)
     deallocate(fldij)
-
-!     ! Sine intepolation
-!     Mx = mesh%m/(m+1)
-!     My = mesh%n/(n+1)
-!     dof_solver%psi%data = 0.0_dp
-!     call sine_intpl(dof_solver%psi%data(2:mesh%m, 2:mesh%n), dof%psi%data, Mx, My)
-
-#if UNSTRUC_GRID == 1
-    ! Unstructured bilinear intepolation: dof_solver%psi%data
-    if ((m .eq. 15) .and. (size(dof_solver%psi%data,1) .eq. 65)) then
-      allocate(fldij(m+2, n+2))
-      fldij = 0.0_dp  ! Boundary condition for streamfunction
-      fldij(2:(m+1), 2:(n+1)) = dof%psi%data
-
-      dof_solver%psi%data = 0.0_dp
-      allocate(xind(17))
-      xind = (/0, 1, 2, 4, 6, 9, 12, 16, 20, 25, 30, 36, 42, 49, 55, 60, 64 /) ! 65: end
-      xind = xind + 1
-      allocate(yind(17))
-!       yind = (/0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64 /) ! 65: end
-      yind = (/0, 4, 10, 18, 24, 29, 33, 35, 37, 38, 39, 41, 43, 47, 52, 60, 64 /)
-      yind = yind + 1
-      
-      ! Interpolate along x
-      do j = 1, size(yind, 1)
-        do i = 1, (size(xind, 1)-1)
-          do k = xind(i), (xind(i+1)-1)
-            dof_solver%psi%data(k, yind(j)) = &
-              ( fldij(i, j)  *(xind(i+1)-k) + &
-                fldij(i+1, j)*(k  -xind(i)) ) / &
-              (xind(i+1)-xind(i))
-          end do
-        end do
-        
-        ! Final point: size(xind, 1)
-        dof_solver%psi%data(xind(size(xind,1)), yind(j)) = 0.0_dp
-      end do
-      
-      ! Interpolate along y
-      do i = 1, size(dof_solver%psi%data, 2)
-        do j = 1, (size(yind, 1)-1)
-          do k = yind(j), (yind(j+1)-1)
-            dof_solver%psi%data(i, k) = &
-              ( dof_solver%psi%data(i, yind(j))  *(yind(j+1)-k) + &
-                dof_solver%psi%data(i, yind(j+1))*(k  -yind(j)) ) / &
-              (yind(j+1)-yind(j))
-          end do
-        end do
-        
-        ! Final point: size(yind, 2)
-        dof_solver%psi%data(i, yind(size(yind,1))) = 0.0_dp
-      end do
-      
-      deallocate(fldij)
-      deallocate(xind)
-      deallocate(yind)
-    end if
-    ! END Unstructured grid
 #endif
-
-!     !! Use Eulerian time-average
-!     dof_solver%psi%data = 0.0_dp
-!     dof_solver%psi%data(2:size(dof_solver%psi%data,1)-1, &
-!                         2:size(dof_solver%psi%data,2)-1) = dof%psi%data
-!     !! End: Use Eulerian time-average
 
     ! Diffusivity
     ! N.B. DOF%psi = Cartesian grid at cell centre
@@ -788,32 +697,8 @@ contains
     integer :: cid, list_i, list_f
     logical :: inrange
     
-#define REL_PRIOR 0
+    inrange = .TRUE.
 
-#if REL_PRIOR == 1
-    integer :: i, j
-    type(field) :: rel
-    
-    inrange = .TRUE.
-    
-    call allocate(rel, dof_solver%psi%m, dof_solver%psi%n, "rel", &
-            glayer=dof_solver%psi%glayer, type_id=dof_solver%psi%type_id)
-    
-    call del2(rel, dof_solver%psi)
-    
-    do j = 1, size(rel%data, 2)
-      do i = 1, size(rel%data, 1)
-        if (dabs(rel%data(i,j)) .gt. prior_param%rel_absmax) then
-          inrange = .FALSE.
-!           write(6, *) rel%data(i,j)*1.666666666666667E-005
-        end if
-      end do
-    end do
-    call deallocate(rel)
-#else
-    inrange = .TRUE.
-#endif
-    
     ! Sigma 1 and Sigma 2
     list_i = dof_solver%m_psi*dof_solver%n_psi+1
     list_f = dof_solver%m_psi*dof_solver%n_psi+2*dof_solver%m_K*dof_solver%n_K
@@ -838,17 +723,13 @@ contains
     type(priordat), intent(inout) :: prior_param
     real(kind=dp), intent(in) :: sc
     
-    prior_param%rel_absmax = 1D-4 / sc
-    
     prior_param%sigma_max = 1D5 * sc
-    prior_param%sigma_min = 1D-2 * sc
+    prior_param%sigma_min = 1.0_dp * sc
     
   end subroutine allocate_prior_param
     
   subroutine deallocate_prior_param(prior_param)
     type(priordat), intent(inout) :: prior_param
-    
-    prior_param%rel_absmax = 0.0_dp
     
     prior_param%sigma_max = 0.0_dp
     prior_param%sigma_min = 0.0_dp
@@ -1033,21 +914,6 @@ contains
     end do
     
   end subroutine convert_theta_to_dof
-  
-  subroutine compute_dJdm_Cid(dJdm, J, J_old, m, m_old, canon_id)
-    real(kind=dp), dimension(:, :), intent(out) :: dJdm
-    real(kind=dp), dimension(:), intent(in) :: J, J_old, m, m_old
-    integer, intent(in) :: canon_id
-    
-    integer :: i
-    real(kind=dp) :: dm
-    
-    dm = m(canon_id)-m_old(canon_id)
-    do i = 1, size(J, 1)
-      dJdm(i,canon_id) = (J(i) - J_old(i))/dm
-    end do
-    
-  end subroutine compute_dJdm_Cid
   
   subroutine tune_SSD(canon_SSD, accept_ratio)
     real(kind=dp), dimension(:), intent(inout) :: canon_SSD

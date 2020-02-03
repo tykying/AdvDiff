@@ -152,8 +152,11 @@ contains
     ! x: range from [0, 1]; bin_size = 1/m
     real(kind = dp), intent(in) :: x
     integer, intent(in) :: m
+    real(kind=dp), parameter :: eps = 1D-10
 
-    CellInd = ceiling(x*m)
+    CellInd = floor(x*m) + 1
+!     CellInd = ceiling(x*m+eps/m)  
+    ! Note: Cannot use ceiling()-wrong in marginal case
   end function CellInd
 
   pure real(kind = dp) function alpha(x,m)
@@ -195,7 +198,7 @@ contains
     i = k2i(k,mesh%m)
     j = k2j(k,mesh%m)
 
-    if (alpha_f(1) < 0.0_dp) then
+    if (alpha_f(1) .lt. 0.0_dp) then
       i0 = max(1, i-1)
       i1 = i
       alpha_x = alpha_f(1) + 1.0_dp
@@ -205,7 +208,7 @@ contains
       alpha_x = alpha_f(1)
     end if
 
-    if (alpha_f(2) < 0.0_dp) then
+    if (alpha_f(2) .lt. 0.0_dp) then
       j0 = max(1, j-1)
       j1 = j
       alpha_y = alpha_f(2) + 1.0_dp
@@ -215,9 +218,7 @@ contains
       alpha_y = alpha_f(2)
     end if
 
-    ! Piecewise constant within the cell
-    !eval_fldpt_rect = fld%data(i,j)
-
+    ! Bilinear interpolation
     eval_fldpt_rect_intpl = &
         eval_field(fld,i0,j0)*(1.0_dp-alpha_x)*(1.0_dp-alpha_y) &
       + eval_field(fld,i1,j0)*alpha_x*(1.0_dp-alpha_y) &

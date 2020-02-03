@@ -53,17 +53,15 @@ contains
 
   subroutine unittest()
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
+    call unittest_operator_order()
     call unittest_comptools()
-    !call unittest_trajdata()
+    call unittest_trajdata()
     !call unittest_solver_properties()
-    !call unittest_fftw()
-    !call unittest_solver_timing()
     !call unittest_IO()
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
     !call unittest_solver_convergence()
-    !call unittest_optimisation_OMP()
-    !call unittest_TG_instability()
+    call unittest_interpolation()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -78,8 +76,6 @@ contains
   end subroutine validation
   
 #include "advdiff_configuration.h"
-#define IBACKWARD 0
-#define EM_MEAN 0
 
   subroutine inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
 #if OMP0MPI1 == 0
@@ -159,7 +155,7 @@ contains
       m_Ind = 16
       n_Ind = m_Ind
     elseif (index(path_arg, "TTG_sinusoidal") .gt. 0) then
-      write(RunProfile, "(a)") "TTG_sinusoidal"
+      write(RunProfile, "(a,i0)") "TTG_sinusoidal_NPART", NPart
       m = 8
       n = 8
       ! m_solver: solver grid
@@ -167,17 +163,6 @@ contains
       ! m_Ind, n_Ind: indicator functions
       m_Ind = 8
       n_Ind = m_Ind
-    else
-      ! Debug mode
-      m = 2
-      n = 2
-      ! m_solver: solver grid
-      m_solver = 8
-      ! m_Ind, n_Ind: indicator functions
-      m_Ind = 2
-      n_Ind = m_Ind
-      
-      call abort_handle("Invalid path", __FILE__, __LINE__)
     end if
 
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -217,11 +202,6 @@ contains
     call allocate(IndFn, m_Ind, n_Ind)
 #elif OMP0MPI1 == 1
     call MPI_INIT( ierr )
-    !call MPI_INIT_THREAD(MPI_THREAD_FUNNELED, PROVIDED, ierr)
-    !if (PROVIDED .ne. MPI_THREAD_FUNNELED) call abort_handle( &
-    !    & "Failed to initialise MPI multi-threads", __FILE__, __LINE__)
-    !call omp_set_num_threads(16/num_procs);
-    !write(6, "(a,i0,a,i0)") " #run = ", num_procs, "; each with #threads = ", 16/num_procs
     call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
     if (ierr .ne. MPI_SUCCESS) then 
       call abort_handle("MPI Failed", __FILE__, __LINE__) 
@@ -508,30 +488,6 @@ contains
     end if
 
   end subroutine inference
-  
-  subroutine pwc_intpl(rfld, fld)
-    real(kind=dp), dimension(:,:), intent(inout) :: rfld
-    real(kind=dp), dimension(:,:), intent(in) :: fld
-    
-    integer :: i_reflv, j_reflv, i_mesh, j_mesh
-    integer :: i, j, i_lv, j_lv
-    
-    i_reflv = size(rfld, 1)/size(fld, 1)
-    j_reflv = size(rfld, 2)/size(fld, 2)
-    
-    do j = 1, size(fld, 2)
-      do i = 1, size(fld, 1)
-        do j_lv = 1, j_reflv
-          do i_lv = 1, i_reflv
-            i_mesh = i_reflv*(i-1)+i_lv
-            j_mesh = j_reflv*(j-1)+j_lv
-            rfld(i_mesh, j_mesh) = fld(i, j)
-          end do
-        end do
-      end do
-    end do
-    
-  end subroutine pwc_intpl
   
   subroutine validate_inference(Td, layer)
     use omp_lib

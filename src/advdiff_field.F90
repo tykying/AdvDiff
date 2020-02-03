@@ -1,4 +1,3 @@
-#define FFTW3 0
 module advdiff_field
   use advdiff_precision
   use advdiff_debug
@@ -11,19 +10,16 @@ module advdiff_field
     & scale, set, addto, addto_product, &
     & dx_field, dy_field, manual_field, &
     & psi_to_uv, int_field, int_sq_field, &
-    & eval_field, iszero
+    & eval_field, iszero, &
+    & dx_field_HoriEdge, dy_field_VertEdge
     
   public :: indicator_field
   public :: uv_signed, K_flux
   public :: print_info, diff_int
-  public :: testcase_fields, fld_x, assign_q_periodic
-  public :: q_stat, S_rhs_nonstat, S_rhs_stat
-  public :: fourier_intpl, cosine_intpl, sine_intpl, bilinear_intpl
+  public :: testcase_fields, fld_x, assign_q_periodic, S_rhs_nonstat
+  public :: bilinear_intpl, pwc_intpl, sine_filter
   public :: neg_int
-  public :: sine_filter
-  public :: del2
   public :: dt_CFL
-  public :: sine_basis
   
   ! Note: field and field_ptr are different
   type field
@@ -134,282 +130,8 @@ contains
     deallocate(fld%data)
 
   end subroutine deallocate_field
-  
-  subroutine sine_basis(inout, wavenumber, amplitude)
-#if FFTW3 == 1
-    ! inout: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-    
-    real(kind=dp), dimension(:, :), intent(inout) :: inout
-    integer :: wavenumber
-    real(kind=dp), intent(in) :: amplitude
-    
-    type(C_PTR) :: plan
-    real(kind=dp), dimension(:, :), allocatable :: Bpq
-    
-    integer :: i, j
-    
-    
-    allocate(Bpq(size(inout,1), size(inout,2)))
-    Bpq = 0.0_dp
-    
-    Bpq(wavenumber, wavenumber) = amplitude
-    
-    plan = fftw_plan_r2r_2d(size(inout,2),size(inout,1), Bpq, &
-                          inout, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, Bpq, inout)
-    call fftw_destroy_plan(plan)
-    
-!     inout = inout/real(4*size(inout,1)*size(inout,2), kind=dp)
-    inout = inout/4.0_dp
-    
-    deallocate(Bpq)
-    call fftw_cleanup()
-#else
-    real(kind=dp), dimension(:, :), intent(inout) :: inout
-    integer :: wavenumber
-    real(kind=dp), intent(in) :: amplitude
-    
-    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
-    inout = 0.0_dp * real(wavenumber, kind=dp) * amplitude
-#endif
-  end subroutine sine_basis
-  
-  ! Fourier interpolations
-  subroutine fourier_intpl(out, in, Mx, My)
-#if FFTW3 == 1
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-    
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-    
-    type(C_PTR) :: plan
-    complex(C_DOUBLE_COMPLEX), dimension(:,:), allocatable :: Zk, Zk_pad
-    real(kind=dp), dimension(:, :), allocatable :: in_copy
-    
-    integer :: i, j
-    
-    if (size(out, 1) .ne. size(in, 1) * Mx) then
-      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    if (size(out, 2) .ne. size(in, 2) * My) then
-      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("fourier_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    
-    allocate(in_copy(size(in,1), size(in,2)))
-    allocate(Zk(size(in,1)/2+1, size(in,2)))
 
-    in_copy = in
-    
-    ! Forward FFT
-    plan = fftw_plan_dft_r2c_2d(size(in_copy,2), size(in_copy,1), in_copy, Zk, FFTW_ESTIMATE)
-    call fftw_execute_dft_r2c(plan, in_copy, Zk)
-    call fftw_destroy_plan(plan)
-
-    allocate(Zk_pad(size(out,1)/2+1, size(out,2)))
-    Zk_pad = 0.0_dp
-    
-    !! Algorithm: https://web.eecs.umich.edu/~fessler/course/451/l/pdf/c5.pdf
-    !! FFT-based approach: zero-pad in the frequency domain
-    
-    ! Zero padding along row (x-direction)
-    ! Note r2c reprentation: last row = N/2+1 term
-    do j = 1, size(Zk, 2)
-      do i = 1, size(Zk, 1)
-        Zk_pad(i, j) = Zk(i,j)
-      end do
-    end do
-    
-    ! Halve the N/2+1 term
-    i = size(Zk, 1)
-    do j = 1, size(Zk, 2)
-      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
-    end do
-    
-    ! Zero padding along column (y-direction)
-    ! Shift along column
-    do j = (size(Zk, 2)/2+2), size(Zk, 2)
-      do i = 1, size(Zk_pad, 1)-1
-        Zk_pad(i, j+(My-1)*size(Zk, 2)) = Zk_pad(i, j)
-        Zk_pad(i, j) = 0.0_dp
-      end do
-    end do
-    
-    ! Halve the N/2+1 term
-    j = size(Zk, 2)/2 + 1
-    do i = 1, size(Zk, 1)
-      Zk_pad(i, j+(My-1)*size(Zk, 2)) = 0.5_dp*Zk_pad(i, j)
-      Zk_pad(i, j) = 0.5_dp*Zk_pad(i, j)
-    end do
-    
-   ! Inverse FFT
-    plan = fftw_plan_dft_c2r_2d(size(out,2),size(out,1), Zk_pad, out, FFTW_ESTIMATE)
-    call fftw_execute_dft_c2r(plan, Zk_pad, out)
-    call fftw_destroy_plan(plan)
-    
-    out = out/real(size(in,1)*size(in,2),kind=dp)
-    
-    deallocate(Zk)
-    deallocate(Zk_pad)
-    deallocate(in_copy)
-    call fftw_cleanup()
-#else
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-    
-    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
-    out = 0.0_dp * in(1,1) * real(Mx * My, kind=dp)
-#endif
-  end subroutine fourier_intpl
-
-  subroutine cosine_intpl(out, in, Mx, My)
-#if FFTW3 == 1
-    ! NOT IN USE
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-  
-    type(C_PTR) :: plan
-    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
-    real(kind=dp), dimension(:, :), allocatable :: in_copy
-    
-    integer :: i, j
-    
-    if (size(out, 1) .ne. size(in, 1) * Mx) then
-       write(6, *) "Mx = ", Mx
-       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    if (size(out, 2) .ne. size(in, 2) * My) then
-      write(6, *) "My = ", My
-      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("cosine_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    
-    allocate(Bpq(size(in,1), size(in,2)))
-    allocate(in_copy(size(in,1), size(in,2)))
-    allocate(Bpq_pad(size(out,1), size(out,2)))
-
-    in_copy = in
-    
-    ! Forward DCT
-    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
-                            FFTW_REDFT10, FFTW_REDFT10, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, in_copy, Bpq)
-    call fftw_destroy_plan(plan)
-
-    ! Zero padding: only need to pad zeros beyond Bpq
-    !! Relationship with matlab dct2
-    !! http://www.voidcn.com/article/p-pduypgxe-du.html
-    Bpq_pad = 0.0_dp
-    do j = 1, size(Bpq, 2)
-      do i = 1, size(Bpq, 1)
-        Bpq_pad(i, j) = Bpq(i, j)
-      end do
-    end do
-    
-    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
-                          out, FFTW_REDFT01, FFTW_REDFT01, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, Bpq_pad, out)
-    call fftw_destroy_plan(plan)
-
-    out = out/real(4*size(in,1)*size(in,2), kind=dp)
-    
-    deallocate(Bpq)
-    deallocate(Bpq_pad)
-    deallocate(in_copy)
-    call fftw_cleanup()
-#else
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-    
-    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
-    out = 0.0_dp * in(1,1) * real(Mx*My, kind=dp)
-#endif
-  end subroutine cosine_intpl
-
-  subroutine sine_intpl(out, in, Mx, My)
-#if FFTW3 == 1
-    ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-  
-    type(C_PTR) :: plan
-    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
-    real(kind=dp), dimension(:, :), allocatable :: in_copy
-    
-    integer :: i, j
-    
-    if ((size(out, 1)+1) .ne. (size(in, 1)+1) * Mx) then
-       write(6, *) "Mx = ", Mx
-       write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("sine_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    if ((size(out, 2)+1) .ne. (size(in, 2)+1) * My) then
-      write(6, *) "My = ", My
-      write(6, *) "size(out) = ", size(out, 1), size(out, 2), "size(in) = ", size(in, 1), size(in, 2)
-      call abort_handle("sine_intpl: size mismatch", __FILE__, __LINE__)
-    end if
-    
-    allocate(Bpq(size(in,1), size(in,2)))
-    allocate(in_copy(size(in,1), size(in,2)))
-    allocate(Bpq_pad(size(out,1), size(out,2)))
-
-    in_copy = in
-    
-    ! Forward DCT
-    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
-                            FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, in_copy, Bpq)
-    call fftw_destroy_plan(plan)
-    
-!     call print_array(Bpq, "Bpq")
-    
-    ! Zero padding: only need to pad zeros beyond Bpq
-    !! Relationship with matlab dct2
-    !! http://www.voidcn.com/article/p-pduypgxe-du.html
-    Bpq_pad = 0.0_dp
-    do j = 1, size(Bpq, 2)
-      do i = 1, size(Bpq, 1)
-        Bpq_pad(i, j) = Bpq(i, j)
-      end do
-    end do
-    
-    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
-                          out, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, Bpq_pad, out)
-    call fftw_destroy_plan(plan)
-
-    out = out/(4*(size(in,1)+1)*(size(in,2)+1))
-    
-    deallocate(Bpq)
-    deallocate(Bpq_pad)
-    deallocate(in_copy)
-    call fftw_cleanup()
-#else
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    integer, intent(in) :: Mx, My  ! Factor of scaling up
-    
-    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
-    out = 0.0_dp * in(1,1) * real(Mx*My, kind=dp)
-#endif
-  end subroutine sine_intpl
-  
+#include "advdiff_configuration.h"
   subroutine sine_filter(out, in)
 #if FFTW3 == 1
     ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
@@ -463,7 +185,7 @@ contains
     out = 0.0_dp * in(1,1)
 #endif
   end subroutine sine_filter
-  
+
   subroutine bilinear_intpl(out, in, Mx, My)
     real(kind=dp), dimension(:, :), intent(out) :: out
     real(kind=dp), dimension(:, :), intent(in) :: in
@@ -519,7 +241,31 @@ contains
     end do
 
   end subroutine bilinear_intpl
-
+  
+  subroutine pwc_intpl(rfld, fld)
+    real(kind=dp), dimension(:,:), intent(inout) :: rfld
+    real(kind=dp), dimension(:,:), intent(in) :: fld
+    
+    integer :: i_reflv, j_reflv, i_mesh, j_mesh
+    integer :: i, j, i_lv, j_lv
+    
+    i_reflv = size(rfld, 1)/size(fld, 1)
+    j_reflv = size(rfld, 2)/size(fld, 2)
+    
+    do j = 1, size(fld, 2)
+      do i = 1, size(fld, 1)
+        do j_lv = 1, j_reflv
+          do i_lv = 1, i_reflv
+            i_mesh = i_reflv*(i-1)+i_lv
+            j_mesh = j_reflv*(j-1)+j_lv
+            rfld(i_mesh, j_mesh) = fld(i, j)
+          end do
+        end do
+      end do
+    end do
+    
+  end subroutine pwc_intpl
+  
   subroutine allocate_uv(uv_fld, psi)
     type(uv_signed), intent(out) :: uv_fld
     type(field), intent(in) :: psi
@@ -543,7 +289,7 @@ contains
     ! maxmin u and v wrt 0
     do j = 1, size(uv_fld%up, 2)
       do i = 1, size(uv_fld%up, 1)
-        if (dabs(uv_fld%up(i,j)) > 1e-14) then
+        if (dabs(uv_fld%up(i,j)) > 1D-14) then
           uv_fld%u_sgn(i,j) = int(sign(1.0_dp, uv_fld%up(i,j)))
         else
           uv_fld%u_sgn(i,j) = 0
@@ -557,7 +303,7 @@ contains
 
     do j = 1, size(uv_fld%vp, 2)
       do i = 1, size(uv_fld%vp, 1)
-        if (dabs(uv_fld%vp(i,j)) > 1e-14) then
+        if (dabs(uv_fld%vp(i,j)) > 1D-14) then
           uv_fld%v_sgn(i,j) = int(sign(1.0_dp, uv_fld%vp(i,j)))
         else
           uv_fld%v_sgn(i,j) = 0
@@ -726,7 +472,7 @@ contains
       do i = 1, psi_fld%m+1
         u(i, j) = psi_fld%data(i, j) - psi_fld%data(i, j+1)
         
-        if (dabs(u(i, j)) < 1e-14) then
+        if (dabs(u(i, j)) < 1D-14) then
           u(i, j) = 0.0_dp
         end if
       end do
@@ -736,7 +482,7 @@ contains
       do i = 1, psi_fld%m
         v(i, j) = psi_fld%data(i+1, j) - psi_fld%data(i, j)
         
-        if (dabs(v(i, j)) < 1e-14) then
+        if (dabs(v(i, j)) < 1D-14) then
           v(i, j) = 0.0_dp
         end if
       end do
@@ -757,7 +503,7 @@ contains
 
     do j = 1, fld%n
       do i = 1, (fld%m+1)
-        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i+gl-1, j+gl)
+        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i-1+gl, j+gl)
       end do
     end do
 
@@ -775,12 +521,80 @@ contains
 
     do j = 1, (fld%n+1)
       do i = 1, fld%m
-        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i+gl, j+gl-1)
+        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i+gl, j-1+gl)
       end do
     end do
 
   end subroutine dy_field
 
+  subroutine dx_field_HoriEdge(d_fld, fld)
+    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    type(field), intent(in) :: fld
+    integer :: i, j, gl
+
+    real(kind = dp), dimension(:, :), pointer :: lfld
+
+    ! Exclude ghost cell in dx_field and dy_field
+    lfld => fld%data
+    gl = fld%glayer
+
+    do i = 1, fld%m
+      d_fld(i, 1) = 0.0_dp          ! Bottom
+      d_fld(i, fld%n+1) = 0.0_dp    ! Top
+    end do
+
+    do j = 2, fld%n
+      d_fld(1, j) = -0.75_dp*(lfld(1+gl, j-1+gl)+lfld(1+gl, j+gl)) &
+                    + (lfld(2+gl, j-1+gl)+lfld(2+gl, j+gl)) &
+                    - 0.25_dp*(lfld(3+gl, j-1+gl)+lfld(3+gl, j+gl))  ! Left
+      d_fld(fld%m, j) = 0.75_dp*(lfld(fld%m+gl, j-1+gl)+lfld(fld%m+gl, j+gl)) &
+                    - (lfld(fld%m-1+gl, j-1+gl)+lfld(fld%m-1+gl, j+gl)) &
+                    + 0.25_dp*(lfld(fld%m-2+gl, j-1+gl)+lfld(fld%m-2+gl, j+gl))  ! Right
+    end do
+
+    do j = 2, fld%n
+      do i = 2, (fld%m-1)
+        d_fld(i, j) = 0.25_dp*(lfld(i+1+gl, j+gl) + lfld(i+1+gl, j-1+gl) &
+                    - lfld(i-1+gl, j+gl) - lfld(i-1+gl, j-1+gl))      ! Interior
+      end do
+    end do
+
+  end subroutine dx_field_HoriEdge
+
+  subroutine dy_field_VertEdge(d_fld, fld)
+    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    type(field), intent(in) :: fld
+    integer :: i, j, gl
+
+    real(kind = dp), dimension(:, :), pointer :: lfld
+
+    lfld => fld%data
+    gl = fld%glayer
+    
+    do i = 2, fld%m
+      d_fld(i, 1) = -0.75_dp*(lfld(i-1+gl, 1+gl)+lfld(i+gl, 1+gl)) &
+                    + (lfld(i-1+gl, 2+gl)+lfld(i+gl, 2+gl)) &
+                    - 0.25_dp*(lfld(i-1+gl, 3+gl)+lfld(i+gl, 3+gl))   ! Bottom
+      d_fld(i, fld%n) = 0.75_dp*(lfld(i-1+gl, fld%n+gl)+lfld(i+gl, fld%n+gl)) &
+                    - (lfld(i-1+gl, fld%n-1+gl)+lfld(i+gl, fld%n-1+gl)) &
+                    + 0.25_dp*(lfld(i-1+gl, fld%n-2+gl)+lfld(i+gl, fld%n-2+gl))  ! Top
+    end do
+
+    do j = 1, fld%n
+      d_fld(1, j) = 0.0_dp          ! Left
+      d_fld(fld%m+1, j) = 0.0_dp    ! Right
+    end do
+
+    do j = 2, (fld%n-1)
+      do i = 2, fld%m
+        d_fld(i, j) = 0.25_dp*(lfld(i+gl, j+1+gl) + lfld(i-1+gl, j+1+gl) &
+                    - lfld(i+gl, j-1+gl) - lfld(i-1+gl, j-1+gl))     ! Interior
+      end do
+    end do
+    
+  end subroutine dy_field_VertEdge
+  
+  
   subroutine manual_field(fld, param)
     type(field), intent(out) :: fld
     integer, intent(in) :: param
@@ -828,80 +642,59 @@ contains
 
   end subroutine manual_field
   
-  subroutine testcase_fields(psi, K11, K22, K12, q, test_id)
+  subroutine testcase_fields(psi, K11, K22, K12, q)
     type(field), intent(inout) :: psi, K11, K22, K12, q
-    integer, intent(in) :: test_id
     integer :: i, j, m, n
     
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
     real(kind = dp) :: x, y
-    integer :: gl
-
+    
     m = q%m
     n = q%n
 
-    ! test_id = 1: 2-Period q
-    ! test_id = 2: steady state    
-    if ((test_id .eq. 1) .or. (test_id .eq. 2)) then     
-      ! psi
-      if (psi%glayer .ne. 0) &
-        call abort_handle("There should not be ghost layer in psi!", __FILE__, __LINE__)
-      
-      if (psi%type_id .ne. 1) &
-        call abort_handle("psi not defined at corners", __FILE__, __LINE__)
-      
-      do j = 1, size(psi%data, 2)
-        do i = 1, size(psi%data, 1)
-          ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
-          x = fld_x(i, m, psi%type_id)  ! in [0, 1]
-          y = fld_x(j, n, psi%type_id)  ! in [0, 1]
-          psi%data(i, j) = m*n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
-          
-          if (dabs(psi%data(i, j)) .le. 1D-15) psi%data(i, j) = 0.0_dp
-        end do
-      end do
-
-      ! K11, K22, K12
-      if (K11%glayer .ne. 0) &
-        call abort_handle("There should not be ghost layer in K11!", __FILE__, __LINE__)
-      
-      if (K11%type_id .ne. 1) &
-        call abort_handle("K11 not defined at corners", __FILE__, __LINE__)
-      
-      do j = 1, size(K11%data, 2)
-        do i = 1, size(K11%data, 1)
-          ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
-          x = fld_x(i, m, K11%type_id)
-          y = fld_x(j, n, K11%type_id)
-          K11%data(i, j) = m*m/((16.0*Pi)**2)* 4.0_dp*dsin(Pi*x)*dsin(Pi*y)
-          K22%data(i, j) = n*n/((16.0*Pi)**2)* 2.0_dp*dsin(Pi*x)*dsin(Pi*y)
-          K12%data(i, j) = m*n/((16.0*Pi)**2)* dsin(Pi*x)*dsin(Pi*y)
-          
-          if (dabs(K11%data(i, j)) .le. 1D-15) K11%data(i, j) = 0.0_dp
-          if (dabs(K22%data(i, j)) .le. 1D-15) K22%data(i, j) = 0.0_dp
-          if (dabs(K12%data(i, j)) .le. 1D-15) K12%data(i, j) = 0.0_dp
-        end do
-      end do
-    end if
+    ! test case = 2-Period q
+    ! psi
+    if (psi%glayer .ne. 0) &
+      call abort_handle("There should not be ghost layer in psi!", __FILE__, __LINE__)
     
+    if (psi%type_id .ne. 1) &
+      call abort_handle("psi not defined at corners", __FILE__, __LINE__)
     
-    if (test_id .eq. 1) then
-      ! q0
-      call assign_q_periodic(q, 0.0_dp)
-      
-    elseif (test_id .eq. 2) then
-      ! Steady state solution
-      gl = q%glayer
-      
-      do j = 1, q%n
-        do i = 1, q%m
-          x = fld_x(i, m, q%type_id)
-          y = fld_x(j, n, q%type_id)
-          q%data(i+gl, j+gl) = q_stat(x,y)
-        end do
+    do j = 1, size(psi%data, 2)
+      do i = 1, size(psi%data, 1)
+        ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
+        x = fld_x(i, m, psi%type_id)  ! in [0, 1]
+        y = fld_x(j, n, psi%type_id)  ! in [0, 1]
+        psi%data(i, j) = m*n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
+        
+        if (dabs(psi%data(i, j)) .le. 1D-15) psi%data(i, j) = 0.0_dp
       end do
-    end if
+    end do
 
+    ! K11, K22, K12
+    if (K11%glayer .ne. 0) &
+      call abort_handle("There should not be ghost layer in K11!", __FILE__, __LINE__)
+    
+    if (K11%type_id .ne. 1) &
+      call abort_handle("K11 not defined at corners", __FILE__, __LINE__)
+    
+    do j = 1, size(K11%data, 2)
+      do i = 1, size(K11%data, 1)
+        ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
+        x = fld_x(i, m, K11%type_id)
+        y = fld_x(j, n, K11%type_id)
+        K11%data(i, j) = m*m/(1000.0_dp)* 4.0_dp*dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
+        K22%data(i, j) = n*n/(1000.0_dp)* 2.0_dp*dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
+        K12%data(i, j) = m*n/(1000.0_dp)* dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
+        
+        if (dabs(K11%data(i, j)) .le. 1D-15) K11%data(i, j) = 0.0_dp
+        if (dabs(K22%data(i, j)) .le. 1D-15) K22%data(i, j) = 0.0_dp
+        if (dabs(K12%data(i, j)) .le. 1D-15) K12%data(i, j) = 0.0_dp
+      end do
+    end do
+    
+    ! q0
+    call assign_q_periodic(q, 0.0_dp)
   end subroutine testcase_fields
   
   subroutine assign_q_periodic(q, t)
@@ -935,17 +728,7 @@ contains
     
   end function q_periodic
   
-  pure real(kind=dp) function q_stat(x, y)
-    ! Define on [0, 1] times [0, 1]
-    real(kind = dp), intent(in) :: x, y
-    real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
-    
-    q_stat = (x*(1.0_dp-y))**2 * (y*(1.0_dp-x))**3
-    !q_stat = (dsin(2.0_dp*Pi*x)*dsin(Pi*y))**2
-    !q_stat = (dsin(2.0_dp*Pi*x)*dsin(Pi*y))**3 - dsin(2.0_dp*Pi*x)*dsin(Pi*y)
-  end function q_stat
-  
-  pure real(kind=dp) function S_rhs_nonstat(x, y, t)
+    pure real(kind=dp) function S_rhs_nonstat(x, y, t)
     ! Define on [0, m] times [0, n]
     real(kind = dp), intent(in) :: x, y, t
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
@@ -955,80 +738,17 @@ contains
     dqt = -1024.0_dp*Pi**3*x**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)**3*dsin(Pi*t)
     udqx = 1280.0_dp*dcos(Pi*y)*Pi*y**3*dsin(2.0_dp*Pi*x)*(-2.0_dp/5.0_dp+x)*(-1.0_dp+y)**2*dcos(Pi*t)*x*(-1.0_dp+x)**2
     vdqy = -512.0_dp*Pi*dcos(2.0_dp*Pi*x)*dsin(Pi*y)*x**2*y**2*(-1.0_dp+x)**3*dcos(Pi*t)*(5.0_dp*y**2-8.0_dp*y+3)
-    divKgradq = dcos(Pi*x)*dsin(Pi*y)*(2048.0_dp*Pi**2*x*(1.0_dp-y)**2*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                -3072.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)**2*dcos(Pi*t))/(64.0_dp*Pi) &
-                +dsin(Pi*x)*dsin(Pi*y)*(2048.0_dp*Pi**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                -12288.0_dp*Pi**2*x*(1.0_dp-y)**2*y**3*(1.0_dp-x)**2*dcos(Pi*t) &
-                +6144.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)*dcos(Pi*t))/(64.0_dp*Pi**2) &
-                +dcos(Pi*x)*dsin(Pi*y)*(-2048.0_dp*Pi**2*x**2*(1.0_dp-y)*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                +3072.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**2*(1.0_dp-x)**3*dcos(Pi*t))/(256.0_dp*Pi) &
-                +dsin(Pi*x)*dsin(Pi*y)*(-4096.0_dp*Pi**2*x*(1.0_dp-y)*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                +6144.0_dp*Pi**2*x**2*(1.0_dp-y)*y**3*(1.0_dp-x)**2*dcos(Pi*t) &
-                +6144.0_dp*Pi**2*x*(1.0_dp-y)**2*y**2*(1.0_dp-x)**3*dcos(Pi*t) &
-                -9216.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**2*(1.0_dp-x)**2*dcos(Pi*t))/(128.0_dp*Pi**2) &
-                +dsin(Pi*x)*dcos(Pi*y)*(2048.0_dp*Pi**2*x*(1.0_dp-y)**2*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                -3072.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)**2*dcos(Pi*t))/(256.0_dp*Pi) &
-                +dsin(Pi*x)*dcos(Pi*y)*(-2048.0_dp*Pi**2*x**2*(1.0_dp-y)*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                +3072.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y**2*(1.0_dp-x)**3*dcos(Pi*t))/(128.0_dp*Pi) &
-                +dsin(Pi*x)*dsin(Pi*y)*(2048.0_dp*Pi**2*x**2*y**3*(1.0_dp-x)**3*dcos(Pi*t) &
-                -12288.0_dp*Pi**2*x**2*(1.0_dp-y)*y**2*(1.0_dp-x)**3*dcos(Pi*t) &
-                +6144.0_dp*Pi**2*x**2*(1.0_dp-y)**2*y*(1.0_dp-x)**3*dcos(Pi*t))/(128.0_dp*Pi**2)
+    divKgradq = 0.01_dp* ( (512.0_dp*(-1.0_dp+x))*exp(-(0.5_dp)*x**2+(0.5_dp)*x-13.0_dp/32.0_dp-(0.5_dp)*y**2+0.75_dp*y)*Pi**2 &
+                * cos(Pi*t)*y*((y**3-8.0_dp/5.0_dp*(y**2)+3.0_dp/5.0_dp*y)*x**5 &
+                + (-12.0_dp/5.0_dp+6.0_dp*y**4-76.0_dp/5.0_dp*(y**3)+18.0_dp/5.0_dp*(y**2)+36.0_dp/5.0_dp*y)*x**4 &
+                + (24.0_dp/5.0_dp+y**5-287.0_dp/20.0_dp*(y**4)+191.0_dp/10.0_dp*(y**3)+53.0_dp/4.0_dp*(y**2)-111.0_dp/5.0_dp*y)*x**3 &
+                +(-7.0_dp/5.0_dp*(y**5)-23.0_dp/4.0_dp*(y**4)+57.0_dp/2.0_dp*(y**3)-731.0_dp/20.0_dp*(y**2)+84.0_dp/5.0_dp*y-12.0_dp/5.0_dp)*x**2 &
+                +(0.2_dp)*(2.0_dp*(-1.0_dp+y))*(y**3+113.0_dp/4.0_dp*(y**2)-157.0_dp/4.0_dp*y+6.0_dp)*y*x-8.0_dp*y**2*(-1.0_dp+y)**2*(0.2_dp)) )
     
     S_rhs_nonstat = dqt + udqx + vdqy - divKgradq
-    !S_rhs_nonstat = dqt - divKgradq
-    !S_rhs_nonstat = dqt + udqx + vdqy
     
   end function S_rhs_nonstat
   
-  pure real(kind=dp) function S_rhs_stat(x, y, qxy, lambda)
-    ! Define on [0, 1] times [0, 1]
-    real(kind = dp), intent(in) :: x, y, qxy, lambda
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-    
-    real(kind = dp) :: dqt, udqx, vdqy, divKgradq
-    
-    ! Explicit source term
-    dqt = 0.0_dp
-    udqx = (5.0_dp*x-2.0_dp)*dcos(Pi*y)*(y-1.0_dp)**2*y**3*dsin(2.0_dp*Pi*x)*(x-1.0_dp)**2*x/(4.0_dp*Pi)
-    vdqy = -(5.0_dp*y-3.0_dp)*dsin(Pi*y)*(y-1.0_dp)*y**2*dcos(2.0_dp*Pi*x)*(x-1.0_dp)**3.0_dp*x**2/(2.0_dp*Pi)
-    divKgradq = (5.0_dp*y*(x-1.0_dp)*((((8.0_dp*y**2-48.0_dp/5.0_dp*y+12.0_dp/5.0_dp)*x**4 &
-                +(10.0_dp*y**3-32.0_dp*y**2+126.0_dp/5.0_dp*y-24.0_dp/5.0_dp)*x**3+(16.0_dp*y**4-46.0_dp*y**3 &
-                +232.0_dp/5.0_dp*(y**2)-18.0_dp*y+12.0_dp/5.0_dp)*x**2+(-96.0_dp/5.0_dp*(y**2)+12.0_dp/5.0_dp*y &
-                -64.0_dp/5.0_dp*(y**4)+148.0_dp/5.0_dp*(y**3))*x+8.0_dp*y**2*(y-1.0_dp)**2*(1.0_dp/5.0_dp))*dsin(Pi*y) &
-                +(2.0_dp*(y-1.0_dp))*y*dcos(Pi*y)*(x-1.0_dp)*((y-3.0_dp/5.0_dp)*x**2+((1.0_dp/2.0_dp)*y**2 &
-                -3.0_dp/2.0_dp*y+3.0_dp/5.0_dp)*x-(1.0_dp/5.0_dp)*y**2+(1.0_dp/5.0_dp)*y)*x*Pi)*dsin(Pi*x) &
-                +dcos(Pi*x)*(y-1.0_dp)*y*dsin(Pi*y)*((y-3.0_dp/5.0_dp)*x**2+(4.0_dp*y**2-5.0_dp*y+3.0_dp/5.0_dp)*x &
-                -8.0_dp*y**2*(1.0_dp/5.0_dp)+8.0_dp*y*(1.0_dp/5.0_dp))*(x-1.0_dp)*x*Pi))/(-256.0_dp*Pi*Pi)
-    
-    
-!     S_rhs_stat = dqt + udqx + vdqy - divKgradq
-    S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt + udqx + vdqy - divKgradq
-!     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt - divKgradq
-!     S_rhs_stat = lambda*(q_stat(x,y) - qxy) + dqt + udqx + vdqy
-  end function S_rhs_stat
-  
-  subroutine del2(out, in)
-    ! Define on [0, 1] times [0, 1]
-    type(field), intent(inout) :: out
-    type(field), intent(in) :: in
-    
-    integer :: m, n
-    
-    if ((size(out%data,1) .ne. size(in%data,1)) .or. &
-          (size(out%data,2) .ne. size(in%data,2)) ) then
-      call abort_handle("Inconsistent del2", __FILE__, __LINE__)
-    end if
-    
-    m = size(in%data,1)
-    n = size(in%data,2)
-    
-    out%data = 0.0_dp
-    out%data(2:m-1,2:n-1) = in%data(3:m,2:n-1) + in%data(1:m-2,2:n-1) &
-                         + in%data(2:m-1,3:n) + in%data(2:m-1,1:n-2) &
-                         - 4.0_dp*in%data(2:m-1,2:n-1)
-    
-  end subroutine del2
-
   pure real(kind=dp) function fld_x(i, m, type_id)
     integer, intent(in) :: i, m, type_id
     

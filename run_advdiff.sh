@@ -19,10 +19,10 @@ make
 date
 SECONDS=0
 
-Td=48
+Td=32
 layer=2
 NPart=676
-for Phase in {2..2}
+for Phase in {1..1}
 do
   Seed_ID=1
   
@@ -48,7 +48,8 @@ do
   mkdir -p $output_dir"/Data"
   mkdir -p $output_dir"/screen"
   #./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
-  nohup mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
+  #nohup mpirun -np 16 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir  > $output_dir"/screen/Phase"$Phase".txt"
+  mpirun -np 32 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
   #mpirun -np 10 ./advdiff $Td $layer $NPart $Phase $Seed_ID $output_dir
   echo Finish!
   #./advdiff $Td $layer $NPart $Phase $Seed_ID

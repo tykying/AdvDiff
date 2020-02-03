@@ -12,22 +12,20 @@ module advdiff_unittest
   implicit none
   
   public :: unittest_comptools, unittest_trajdata, unittest_solver_properties
-  public :: unittest_fftw, unittest_solver_timing, unittest_solver_convergence
+  public :: unittest_solver_convergence
   public :: unittest_IO, unittest_timer
-  public :: unittest_FPsolver_INPUT, unittest_TG_instability
+  public :: unittest_FPsolver_INPUT, unittest_interpolation
   
-  integer, dimension(4) :: SEED = (/ 1989, 6, 11, 28 /)
+  integer, dimension(4) :: SEED = (/ 314, 159, 26, 535 /)
 
 contains
   subroutine unittest_comptools()
     real(kind=dp) :: mean, stdv, mu, sigma, gamma, sample
     real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
     real(kind=dp), dimension(2,2) :: K, Krt
-    integer :: i, j, n, m, r
+    integer :: i, n, m, r
     real(kind=dp) :: sigma1_sq, sigma2_sq, phi_K, Kxx, Kyy, Kxy
     
-    type(field) :: rel, psi
-    real(kind=dp) :: x, y
     real(kind=dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
 
     ! Mod and division
@@ -181,97 +179,279 @@ contains
     end if
     write(6, "(a)") "  -- P: Passed KCarte <-> KCanon conversion test"
     
-    
-    m = 1024
-    n = m
-    call allocate(psi, m, n, "psi", glayer=0, type_id=1)
-    call allocate(rel, psi%m, psi%n, "rel", glayer=psi%glayer, type_id=psi%type_id)
-    
-    do j = 1, size(psi%data, 2)
-      do i = 1, size(psi%data, 1)
-        x = fld_x(i, psi%m, psi%type_id)
-        y = fld_x(j, psi%n, psi%type_id)
-        
-        psi%data(i,j) = dsin(2.0_dp* Pi * x) * dsin(Pi * y)
-      end do
-    end do
-    
-    call del2(rel, psi)
-    
-!     call print_array(rel%data*m*m, "rel*m*m")
-!     call print_array(((2.0_dp*Pi)**2 + Pi**2)*psi%data, "((2.0_dp*Pi)**2 + Pi**2)*psi%data")
-    
-!     if (.not. iszero(rel%data*m*m + ((2.0_dp*Pi)**2 + Pi**2)*psi%data) ) then
-!         call abort_handle("del2: inconsistent", __FILE__, __LINE__)
-!     end if
-
-    call deallocate(rel)
-    call deallocate(psi)
-    
-    write(6, "(a)") "  -- P: del2 consistent"
-    
     write(6, "(a)") &
       "! ----------- Passed unittest_comptools ----------- !"
   end subroutine unittest_comptools
 
   subroutine unittest_trajdata()
     type(jumpsdat), dimension(:), allocatable :: jumps
-    integer :: m, n, cell
+    integer :: m, n
     type(meshdat) :: mesh
 
     type(field) :: q
+    type(trajdat) :: traj
+    integer :: nparticles, nts0, k, m_part, k_i, jump
+    real(kind=dp), dimension(:,:), allocatable :: lik, lik_exact
 
+    ! Part 2
     m = 64
-    n = 32
-
+    n = m
     call allocate(mesh, m, n)
-    call print_info(mesh)
+    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
 
+    ! Assign particle
+    m_part = 16
+    nparticles = 1
+    
+    nts0 = m_part*m_part+1
+    call allocate(traj, nparticles, nts0)
+    allocate(lik_exact(nparticles, nts0-1))
+    allocate(lik(nparticles, nts0-1))
+    
+    do k = 2, nts0
+      traj%x(1, k) = particle_x(k-1, m_part)
+      traj%y(1, k) = particle_y(k-1, m_part)
+      traj%t(:, k) = real(k-1, kind=dp)
+    end do
+    traj%x(:, 1) = traj%x(:, 2)
+    traj%y(:, 1) = traj%y(:, 2)
+    traj%t(:, 1) = 0.0_dp
+    
+    do k = 2, nts0
+      lik_exact(1, k-1) = testcase_traj(traj%x(1, k), traj%y(1, k))
+    end do
+    
+!     call print_array(traj%x, "traj%x")
+!     call print_array(traj%y, "traj%y")
+    
     call allocate(jumps, mesh)
-!     write(6, "(a,"//int_chr//")") "  size(jumps)", size(jumps)
-!     write(6, "(a)") "  Before initialisation: "
-!     write(6, "(a,"//int_chr//","//int_chr//")") "  jumps(1:2)%njumps", jumps(1)%njumps, jumps(2)%njumps
-
-    do cell = 1, mesh%ncell
-      call allocate(jumps(cell), 23)
-    end do
-    call allocate(jumps(2), 51)
-
-!     write(6, "(a)") "  After initialisation: "
-!     write(6, "(a,"//int_chr//","//int_chr//")") "  jumps(1:2)%njumps", jumps(1)%njumps, jumps(2)%njumps
-!     write(6, "(a,"//int_chr//","//int_chr//")") "  size(jumps(1)%k_f)", size(jumps(1)%k_f)
-!     write(6, "(a,"//int_chr//","//int_chr//")") "  size(jumps(2)%alpha_i, 1:2)", size(jumps(2)%alpha_i, 1), size(jumps(2)%alpha_i, 2)
-
-    write(6, "(a)") ""
-    write(6, "(a)") "  Test eval_fldpt: "
-    call allocate(q, m, n, 'q')
-    ! Assign q(i,j) = real(j)*real(i)
-    call manual_field(q, 2)
-
-    jumps(1)%k_f(1) = 23
-    jumps(1)%k_f(2) = 23*16+7
-
-    write(6, "(a,"//dp_chr//")") "|  eval_fldpt(1)", eval_fldpt(q, mesh, jumps(1)%k_f(1))
-    write(6, "(a,"//dp_chr//")") "|  eval_fldpt(2)", eval_fldpt(q, mesh, jumps(1)%k_f(2))
-
-    if (dabs(eval_fldpt(q, mesh, jumps(1)%k_f(1))-23.0_dp) > 1D-14) &
-      call abort_handle("eval_fldpt(1):", __FILE__, __LINE__)
-
-    if (dabs(eval_fldpt(q, mesh, jumps(1)%k_f(2))-330.0_dp) > 1D-14) &
-      call abort_handle("eval_fldpt(2):", __FILE__, __LINE__)
-
-
-    write(6, "(a)") "  -- P: Evaluation of function -- "
-
+    ! Convert trajectory into jumps
+    call traj2jumps(jumps, traj, mesh)
+    
+    call assign_q_traj(q)
+    
+    k = 0
+    do k_i = 1, size(jumps, 1)
+      do jump = 1, jumps(k_i)%njumps
+        k = k + 1
+        lik(1, k) = eval_fldpt(q, mesh, jumps(k_i)%k_f(jump), jumps(k_i)%alpha_f(:,jump))
+      end do
+    end do   
+    
+    if (.not. iszero(lik-lik_exact)) then
+      call print_array(lik, "lik")
+      call print_array(lik_exact, "lik_exact")
+      call abort_handle("eval_fldpt may be wrong! Note it is meant to be so near boundaries.", __FILE__, __LINE__)
+    end if
+    
+    deallocate(lik)
+    deallocate(lik_exact)
     call deallocate(q)
-    do cell = 1, mesh%ncell
-      call deallocate(jumps(cell))
-    end do
-
+    call deallocate(traj)
+    call deallocate(jumps)
+    
     write(6, "(a)") &
       "! ----------- Passed unittest_trajdata ----------- !"
   end subroutine unittest_trajdata
+  
+  pure real(kind=dp) function particle_x(k,m)
+    ! Output: on [0, 1]
+    integer, intent(in) :: k, m
+    integer :: i
+    
+    i = k2i(k,m)
+    particle_x = (real(i, kind=dp)-0.5_dp)/real(m, kind=dp)
+    
+  end function particle_x
+  
+  pure real(kind=dp) function particle_y(k,m)
+    ! Output: on [0, 1]
+    integer, intent(in) :: k, m
+    integer :: j
+    
+    j = k2j(k,m)
+    particle_y = (real(j, kind=dp)-0.5_dp)/real(m, kind=dp)
+    
+  end function particle_y
+  
+  pure real(kind=dp) function testcase_traj(x, y)
+    real(kind=dp), intent(in) :: x, y
+    
+    testcase_traj = 2.0_dp * x - 3.0_dp * y + 5.0_dp * x * y
+  end function testcase_traj
+  
+  subroutine assign_q_traj(q)
+    type(field), intent(inout) :: q
+    integer :: i, j, gl
+    real(kind=dp) :: x, y
+    
+    gl = q%glayer
 
+    do j = 1, q%n
+      do i = 1, q%m
+        x = (real(i, kind=dp)-0.5_dp)/real(q%m, kind=dp)
+        y = (real(j, kind=dp)-0.5_dp)/real(q%n, kind=dp)
+        
+        q%data(i+gl, j+gl) = testcase_traj(x, y)
+      end do
+    end do
+    
+    call imposeBC(q)
+    
+  end subroutine assign_q_traj
+
+  subroutine unittest_operator_order()
+    type(field) :: q, dqdt
+    integer :: m, n, glayer, type_id
+    
+    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
+    integer :: i, j, gl, h, h_range
+    real(kind = dp) :: x, y, p_F, p_G
+    
+    real(kind=dp), dimension(:,:), allocatable :: dqx_F, dqy_F, dqx_G, dqy_G
+    real(kind=dp), dimension(:,:), allocatable :: dqx_G_exact, dqy_F_exact
+    real(kind=dp), dimension(:), allocatable :: h_arr, err_arr_F, err_arr_G
+    
+    h_range = 10
+    allocate(err_arr_F(h_range))
+    allocate(err_arr_G(h_range))
+    allocate(h_arr(h_range))
+
+    do h = 1, h_range
+    m = 2**(h+2)
+    n = m
+    h_arr(h) = 1.0_dp/real(m, kind=dp)
+    
+    glayer = 1
+    type_id = 2  ! Defined at cell centre; =1: defined at corners
+    call allocate(q, m, n, 'q', glayer=glayer, type_id=type_id)
+    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+    
+    allocate(dqx_F(q%m+1, q%n))
+    allocate(dqy_F(q%m+1, q%n))
+    allocate(dqx_G(q%m, q%n+1))
+    allocate(dqy_G(q%m, q%n+1))
+    allocate(dqx_G_exact(q%m, q%n+1))
+    allocate(dqy_F_exact(q%m+1, q%n))
+
+    gl = q%glayer
+      
+    !call zeros(q)
+    do j = 1, q%n
+      do i = 1, q%m
+        x = fld_x(i, q%m, q%type_id)
+        y = fld_x(j, q%n, q%type_id)
+        q%data(i+gl, j+gl) = dcos(0.5_dp*Pi*x) * dcos(Pi*y)
+      end do
+    end do
+    
+    call imposeBC(q)
+    
+    dqx_F = 999.0_dp
+    dqy_F = 999.0_dp
+    dqx_G = 999.0_dp
+    dqy_G = 999.0_dp
+    
+    call dx_field(dqx_F, q)
+    call dx_field_HoriEdge(dqx_G, q)
+    
+    call dy_field_VertEdge(dqy_F, q)
+    call dy_field(dqy_G, q)
+    
+    ! Compare with exact solution
+    do j = 1, size(dqx_G, 2)
+      do i = 1, size(dqx_G, 1)
+        x = fld_x(i, q%m, 2)  ! typeid=2: Centre
+        y = fld_x(j, q%n, 1)  ! typeid=1: Corner
+        dqx_G_exact(i, j) = -0.5_dp*Pi*dsin(0.5_dp*Pi*x) * dcos(Pi*y)
+      end do
+    end do
+    
+    do j = 1, size(dqy_F, 2)
+      do i = 1, size(dqy_F, 1)
+        x = fld_x(i, q%m, 1)  ! typeid=1: Corner
+        y = fld_x(j, q%n, 2)  ! typeid=2: Centre
+        dqy_F_exact(i, j) = -Pi*dcos(0.5_dp*Pi*x) * dsin(Pi*y)
+      end do
+    end do
+    
+    dqx_G = dqx_G*real(m, kind=dp)
+    dqy_F = dqy_F*real(m, kind=dp)
+    
+    ! Boundary: set value equal to exact one
+    dqx_G(:, 1) = dqx_G_exact(:, 1)
+    dqx_G(:, size(dqx_G,2)) = dqx_G_exact(:, size(dqx_G,2))
+    dqy_F(1, :) = dqy_F_exact(1, :)
+    dqy_F(size(dqy_F,1), :) = dqy_F_exact(size(dqy_F,1), :)
+    
+    err_arr_G(h) = max_diff(dqx_G, dqx_G_exact)
+    err_arr_F(h) = max_diff(dqy_F, dqy_F_exact)
+    
+    deallocate(dqy_F_exact)
+    deallocate(dqx_G_exact)
+    deallocate(dqy_G)
+    deallocate(dqx_G)
+    deallocate(dqy_F)
+    deallocate(dqx_F)
+    call deallocate(dqdt)
+    call deallocate(q)
+    end do
+    
+    p_G = estimate_order(h_arr, err_arr_G)
+    write(6, *) "  G order = ", p_G
+    if (dabs(p_G-2.0_dp) > 1D-3) then
+      call abort_handle("G: Not 2nd order gradient operator", __FILE__, __LINE__)
+    end if
+    
+    
+    p_F = estimate_order(h_arr, err_arr_F)
+    write(6, *) "  F order = ", p_F
+    if (dabs(p_F-2.0_dp) > 1D-3) then
+      call abort_handle("F: Not 2nd order gradient operator", __FILE__, __LINE__)
+    end if
+     
+    deallocate(err_arr_F)
+    deallocate(err_arr_G)
+    
+  end subroutine unittest_operator_order
+  
+  pure real(kind=dp) function max_diff(arr1, arr2)
+    real(kind=dp), dimension(:,:), intent(in) :: arr1, arr2
+
+    integer :: i, j
+    real(kind=dp) :: max_err, diff_arr
+    
+    max_err = 0.0_dp
+    
+    do j = 1, size(arr1, 2)
+      do i = 1, size(arr1, 1)
+        diff_arr = dabs(arr1(i,j)-arr2(i,j))
+        if (diff_arr .gt. max_err) then
+          max_err = diff_arr
+        end if
+      end do
+    end do
+    
+    max_diff = max_err
+
+  end function max_diff 
+  
+  pure real(kind=dp) function estimate_order(h_arr, err_arr)
+    real(kind = dp), dimension(:), intent(in) :: h_arr, err_arr
+    real(kind = dp) :: p
+    integer :: N, i
+    
+    N = size(h_arr, 1)
+    p = 0.0_dp
+    ! Use average of last three to estimate the order
+    do i = 1, 4
+      p = p + dlog(err_arr(N-i+1)/err_arr(N-i))/dlog(h_arr(N-i+1)/h_arr(N-i))
+    end do
+    
+    estimate_order = p/4.0_dp
+    
+  end function estimate_order
+  
   subroutine unittest_solver_properties()
     type(field) :: q, K11, K22, K12, psi
     integer :: m, n
@@ -290,6 +470,7 @@ contains
     type(field) :: q0
     real(kind=dp) :: q_int_0, x, y
     real(kind=dp), dimension(:,:), allocatable :: dqx, dqy
+    real(kind=dp), parameter :: eps = 1D-14
     
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
 
@@ -331,8 +512,8 @@ contains
     deallocate(dqx)
     deallocate(dqy)
     
-    m = 32+1
-    n = 32+1
+    m = 64+1
+    n = 64+1
     call allocate(q, m, n, 'q', glayer=gl, type_id=2)
     call allocate(q0, m, n, 'q0', glayer=gl, type_id=2)
     call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
@@ -351,14 +532,13 @@ contains
     
 !     call print_array(psi%data, "psi")
 
-    call set(K11, 1.0_dp)
-    call set(K22, 1.0_dp)
+    call set(K11, 0.1_dp)
+    call set(K22, 0.1_dp)
     call set(K12, 0.0_dp)
     
     ! Convert data structure
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
 
     !dt_UB = 1.0_dp/maxmax(uv_fld%u_abs, uv_fld%v_abs)
     !nts = ceil(t/(1/dt_UB))
@@ -385,13 +565,13 @@ contains
 
     call print_info(psi, dt)
 
-    if (.not. rotsym(q)) then
+    if (rotsym(q) .ge. eps) then
       call abort_handle(" ! FAIL @ Rotational symmetry at initialisation", __FILE__, __LINE__)
     end if
 
 !     call print_array(psi%data, "psi")
     do i = 1, nts
-      call timestep_heun_Kflux(q, dt, K_e)
+      call timestep_heun_K(q, dt, K_e)
       call timestep_LMT_2D(q, dt, uv_fld)
 
       if (mod(i, floor(nts/25.0_dp)) .eq. 0) then
@@ -404,15 +584,16 @@ contains
 !     call print_array(q%data, "q")
 
     ! Test rotational symmetry
-    if (rotsym(q)) then
+    if (rotsym(q) .le. eps) then
       write(6, *) " -- P: Rotational symmetry preserved --"
     else
       call print_array(q%data, "Final q")
+      write(6, *) "Maximum discrepency = ", rotsym(q)
       call abort_handle(" ! FAIL @ Rotational symmetry", __FILE__, __LINE__)
     end if
 
     ! Test mass conservation
-    if (diff_int(q, q0) < 1D-13) then
+    if (diff_int(q, q0) .le. 10.0_dp*eps) then
       write(6, *) " -- P: Total mass conserved --"
     else
       write(6, "(a,"//dp_chr//")") "Difference in mass = ", diff_int(q, q0)
@@ -465,10 +646,9 @@ contains
 
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
 
     do i = 1, nts
-      call timestep_heun_Kflux(q, dt, K_e)
+      call timestep_heun_K(q, dt, K_e)
       call timestep_LMT_2D(q, dt, uv_fld)
     end do
 
@@ -535,30 +715,29 @@ contains
     
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
     
     call set(q0, q)
     t = 10.0_dp*Pi
-    nts = floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
+    nts = 10*floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
     dt = t/nts
     
     call print_info(psi, dt)
+!     call print_array(q%data, 'q0')
     
     do i = 1, nts
-      call timestep_heun_Kflux(q, dt, K_e)
-!       call timestep_LaxWendoff(q, dt, uv_fld)
-!       call timestep_LMT_1DS(q, dt, uv_fld)
+      call timestep_heun_K(q, dt, K_e)
       call timestep_LMT_2D(q, dt, uv_fld)
 
       ! Check at every step
-      if (neg_int(q) .lt. 0.0_dp) then
+      if (dabs(neg_int(q)) .ge. eps) then
         write(6, *) i, "-th step"
+        call print_array(q%data, 'q')
         call print_info(q)
         call abort_handle(" ! FAIL  @ Preserved positivity", __FILE__, __LINE__)
       end if
     end do
 
-    if (neg_int(q) .ge. 0.0_dp) then
+    if (dabs(neg_int(q)) .lt. eps) then
       write(6, *) " -- P: Preserved positivity --"
     end if
     
@@ -577,455 +756,86 @@ contains
       "! ----------- Passed unittest_solver_properties ----------- !"
   end subroutine unittest_solver_properties
   
-  pure logical function rotsym(fld)
+  pure real(kind=dp) function rotsym(fld)
     type(field), intent(in) :: fld
     integer :: m, n, i, j, gl
-    real(kind=dp), parameter :: eps = 1D-14
+    real(kind=dp) :: max_err, err
 
     m = fld%m
     n = fld%n
     gl = fld%glayer
 
-    rotsym = .true.
+    max_err = 0.0_dp
 
     ! Test rotational symmetry
     if ((m .ne. n) .or. (mod(m,2) .ne. 1)) then
-      rotsym = .false.
+      rotsym = 1D15
     else
       do j = 1, n
         do i = 1, m
           ! Rotate by pi: x->-x; y->-y
-          if (dabs(fld%data(i+gl, j+gl)-fld%data(m-i+1+gl, n-j+1+gl)) > eps) then
-            rotsym = .false.
+          err = dabs(fld%data(i+gl, j+gl)-fld%data(m-i+1+gl, n-j+1+gl))
+          if (err .gt. max_err) then
+            max_err = err
           end if
           ! Rotate by 3pi/2: x->y;  y->-x
-          if (dabs(fld%data(i+gl, j+gl)-fld%data(j+gl, m-i+1+gl)) > eps) then
-            rotsym = .false.
+          err = dabs(fld%data(i+gl, j+gl)-fld%data(j+gl, m-i+1+gl))
+          if (err .gt. max_err) then
+            max_err = err
           end if
           ! Rotate by pi/2: x->-y;  y->x
-          if (dabs(fld%data(i+gl, j+gl)-fld%data(n-j+1+gl, i+gl)) > eps) then
-            rotsym = .false.
+          err = dabs(fld%data(i+gl, j+gl)-fld%data(n-j+1+gl, i+gl))
+          if (err .gt. max_err) then
+            max_err = err
           end if
         end do
       end do
+      
+      rotsym = max_err
     end if
-
   end function rotsym
   
-  subroutine unittest_fftw()
-    integer, parameter :: Nx = 8
-    integer, parameter :: Ny = 16
-    real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
-    
-    real(kind=dp), dimension(:, :), allocatable :: data_in, data_intpl, data_exact
-
-    integer :: i, j, scx, scy
-    real(kind=dp) :: x, y
-
-    ! Discrete Fourier transform
-    scx = 3
-    scy = 5
-   
-    ! Data input
-    allocate(data_in(Nx, Ny))
-    do j = 1, size(data_in, 2)
-      do i = 1, size(data_in, 1)
-        x = real(i-1, kind=dp)/real(Nx, kind=dp)
-        y = real(j-1, kind=dp)/real(Ny, kind=dp)
-        
-        data_in(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
-      end do
-    end do
-    
-    ! Data exact
-    allocate(data_exact(Nx*scx, Ny*scy))
-    do j = 1, size(data_exact, 2)
-      do i = 1, size(data_exact, 1)
-        x = real(i-1, kind=dp)/real(Nx*scx, kind=dp)
-        y = real(j-1, kind=dp)/real(Ny*scy, kind=dp)
-        
-        data_exact(i, j) = dsin(4.0_dp*Pi*x)*dsin(2.0_dp*Pi*y) + dsin(8.0_dp*Pi*y-2.0_dp*Pi*x)
-      end do
-    end do
-    
-    ! Test: Interpolation subroutine
-    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
-    
-    call fourier_intpl(data_intpl, data_in, scx, scy)
-    if (.not. iszero(data_exact-data_intpl)) &
-      call abort_handle(" ! FAIL  @ Inconsistent fourier_intpl", __FILE__, __LINE__)
-    
-    deallocate(data_in)
-    deallocate(data_exact)
-    deallocate(data_intpl)
-    
-    
-    ! Discrete Cosine transform
-    ! Data input
-    allocate(data_in(Nx, Ny))
-    do j = 1, size(data_in, 2)
-      do i = 1, size(data_in, 1)
-        x = real(2*i-1, kind=dp)/real(2*Nx, kind=dp)
-        y = real(2*j-1, kind=dp)/real(2*Ny, kind=dp)
-        
-        data_in(i, j) = dcos(Pi*x)*dcos(2.0_dp*Pi*y) + dcos(4.0_dp*Pi*x)*dcos(6.0_dp*Pi*y)
-      end do
-    end do
-    
-    ! Data exact
-    allocate(data_exact(Nx*scx, Ny*scy))
-    do j = 1, size(data_exact, 2)
-      do i = 1, size(data_exact, 1)
-        x = real(2*i-1, kind=dp)/real(2*Nx*scx, kind=dp)
-        y = real(2*j-1, kind=dp)/real(2*Ny*scy, kind=dp)
-        
-        data_exact(i, j) = dcos(Pi*x)*dcos(2.0_dp*Pi*y) + dcos(4.0_dp*Pi*x)*dcos(6.0_dp*Pi*y)
-      end do
-    end do
-    
-    ! Test : Interpolation subroutine
-    allocate(data_intpl(size(data_in,1)*scx, size(data_in,2)*scy))
-    call cosine_intpl(data_intpl, data_in, scx, scy)
-    
-    if (.not. iszero(data_exact-data_intpl)) &
-      call abort_handle(" ! FAIL  @ Inconsistent cosine_intpl", __FILE__, __LINE__)
-    
-    deallocate(data_in)
-    deallocate(data_exact)
-    deallocate(data_intpl)
-    
-    ! Discrete sine transform
-    ! Data input
-    allocate(data_in(Nx+1, Ny+1))
-    do j = 1, size(data_in, 2)
-      do i = 1, size(data_in, 1)
-        x = real(i-1, kind=dp)/real(Nx, kind=dp)
-        y = real(j-1, kind=dp)/real(Ny, kind=dp)
-        
-        data_in(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(4.0_dp*Pi*x)*dsin(6.0_dp*Pi*y)
-      end do
-    end do
-    
-    ! Data exact
-    scx = 2
-    scy = 4
-    allocate(data_exact(Nx*scx+1, Ny*scy+1))
-    do j = 1, size(data_exact, 2)
-      do i = 1, size(data_exact, 1)
-        x = real(i-1, kind=dp)/real(Nx*scx, kind=dp)
-        y = real(j-1, kind=dp)/real(Ny*scy, kind=dp)
-        
-        data_exact(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(4.0_dp*Pi*x)*dsin(6.0_dp*Pi*y)
-      end do
-    end do
-    
-    ! Test : Interpolation subroutine
-    allocate(data_intpl(size(data_exact,1), size(data_exact,2)))
-    data_intpl = 0.0_dp
-    call sine_intpl(data_intpl(2:Nx*scx, 2:Ny*scy), data_in(2:Nx, 2:Ny), scx, scy)
-    
-    if (.not. iszero(data_exact-data_intpl)) then
-      call print_array(data_intpl, "data_intpl")
-      call print_array(data_exact, "data_exact")
-      call abort_handle(" ! FAIL  @ Inconsistent sine_intpl", __FILE__, __LINE__)
-    end if
-    
-    deallocate(data_in)
-    deallocate(data_exact)
-    deallocate(data_intpl)
-    
-    ! Test : Sinusoidal filter
-    scx = 128+1
-    scy = 128+1
-    allocate(data_in(scx, scy))
-    do j = 1, size(data_in, 2)
-      do i = 1, size(data_in, 1)
-        x = real(i-1, kind=dp)/real(scx-1, kind=dp)
-        y = real(j-1, kind=dp)/real(scy-1, kind=dp)
-        
-        data_in(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y) + dsin(16.0_dp*Pi*x)*dsin(16.0_dp*Pi*y)
-      end do
-    end do
-    
-    allocate(data_exact(16+1, 16+1))
-    
-    do j = 1, size(data_exact, 2)
-      do i = 1, size(data_exact, 1)
-        x = real(i-1, kind=dp)/real(size(data_exact,1)-1, kind=dp)
-        y = real(j-1, kind=dp)/real(size(data_exact,2)-1, kind=dp)
-        
-       data_exact(i, j) = dsin(Pi*x)*dsin(2.0_dp*Pi*y)
-      end do
-    end do
-    
-    allocate(data_intpl(16+1, 16+1))
-    data_intpl = 0.0_dp
-    call sine_filter(data_intpl(2:size(data_intpl,1)-1,2:size(data_intpl,2)-1), &
-                     data_in(2:size(data_in,1)-1,2:size(data_in,2)-1))
-    
-    if (.not. iszero(data_intpl-data_exact)) then
-      call abort_handle(" ! FAIL  @ Inconsistent sine_filter", __FILE__, __LINE__)
-    end if
-    
-    
-    deallocate(data_intpl)
-    deallocate(data_exact)
-    deallocate(data_in)
-    
-    write(6, "(a)") &
-      "! ----------- Passed unittest_fftw ----------- !"
-  end subroutine unittest_fftw
-  
-  subroutine unittest_solver_timing()
-    type(field) :: K11, K22, K12, psi
-    integer :: m, n
-
-    type(uv_signed) :: uv_fld
-    type(K_flux) :: K_e
-
-    integer, parameter :: gl = 1
-
-    real(kind=dp) :: t = 12.0_dp*3.1415926_dp
-    real(kind=dp) :: dt, x, y
-    integer :: nts = 64*16
-    integer :: i, j
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    type(field) :: q, qLW, q2D
-    
-    type(timer), save :: DS_timer, LW_timer, D2_timer
-    
-    ! Test 1DS and 1DS2 equivalence
-    m = 80
-    n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(qLW, m, n, 'qLW', glayer=gl, type_id=2)
-    call allocate(q2D, m, n, 'q2D', glayer=gl, type_id=2)
-    
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
-    
-    ! Initialise psi
-    do j = 1, size(psi%data,2)
-      do i = 1, size(psi%data,1)
-        x = fld_x(i, psi%m, psi%type_id)  ! in [0, 1]
-        y = fld_x(j, psi%n, psi%type_id)  ! in [0, 1]
-        psi%data(i, j) = psi%m*psi%n/(2.0_dp*Pi**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
-      end do
-    end do
-
-    ! Initialise K
-    do j = 1, size(K11%data,2)
-      do i = 1, size(K11%data,1)
-        x = fld_x(i, K11%m, K11%type_id)  ! in [0, 1]
-        y = fld_x(j, K11%n, K11%type_id)  ! in [0, 1]
-        K11%data(i, j) = 0.02_dp*(1.0_dp + dsin(2.0_dp*Pi*x) * dsin(2.0_dp*Pi*y))**2
-        K22%data(i, j) = 0.03_dp*(1.0_dp + dsin(2.0_dp*Pi*x) * dsin(2.0_dp*Pi*y))**2
-        K12%data(i, j) = 0.01_dp*(1.0_dp + dsin(2.0_dp*Pi*x) * dsin(2.0_dp*Pi*y))**2
-      end do
-    end do
-
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
-    
-    call manual_field(q, 4)
-    call imposeBC(q)
-    call set(qLW, q)
-    call set(q2D, q)
-    dt = t/real(nts, kind=dp)
-    
-    ! 1DS
-    call reset(DS_timer)
-    call start(DS_timer)
-    do i = 1, nts
-!       call timestep_heun2_Kflux(q2, 0.5_dp*dt, K_e)
-!       call timestep_LMT_1DS2(q2, dt, uv_fld)
-!       call timestep_heun2_Kflux(q2, 0.5_dp*dt, K_e)
-       call timestep_heun_Kflux(q, 0.5_dp*dt, K_e)
-       call timestep_LMT_1DS(q, dt, uv_fld)
-       call timestep_heun_Kflux(q, 0.5_dp*dt, K_e)
-       ! First order
-!        call timestep_fe_Kflux(q2, dt, K_e)
-!        call timestep_LMT_2D(q2, dt, uv_fld)
-    end do
-    call stop(DS_timer)
-    
-    ! Lax Wendoff
-    call reset(LW_timer)
-    call start(LW_timer)
-    do i = 1, nts
-      call timestep_heun_Kflux(qLW, 0.5_dp*dt, K_e)
-      !call timestep_fe_Kflux(qLW, 0.5_dp*dt, K_e)
-      call timestep_LaxWendoff(qLW, dt, uv_fld)
-      call timestep_heun_Kflux(qLW, 0.5_dp*dt, K_e)
-    end do
-    call stop(LW_timer)
-    
-    ! MC
-    call reset(D2_timer)
-    call start(D2_timer)
-    do i = 1, nts
-      call timestep_heun_Kflux(q2D, dt, K_e)
-      call timestep_LMT_2D(q2D, dt, uv_fld)
-    end do
-    call stop(D2_timer)
-    
-    write(6, "(a)") "Dimensional S + Strang S + Limiter timers:"
-      call print(DS_timer, "Time", prefix = "  ")
-      
-    write(6, "(a)") "Dimensional S + Strang S + LaxWendoff timers:"
-      call print(LW_timer, "Time", prefix = "  ")
-      
-    write(6, "(a)") "UnSplit + Godunov S + Limiter  timers:"
-      call print(D2_timer, "Time", prefix = "  ")
-    
-!     call print_array(q%data, 'q')
-
-    
-    call addto(qLW, q, -1.0_dp)
-    
-    if (iszero(qLW%data)) then
-      write(6, *) " -- P: 1DS consistent with LW --"
-    else
-      call abort_handle(" ! FAIL  @ 1DS/LW consistency", __FILE__, __LINE__)
-    end if
-    
-    
-
-    call deallocate(q)
-    call deallocate(qLW)
-    call deallocate(psi)
-    call deallocate(K11)
-    call deallocate(K22)
-    call deallocate(K12)
-    
-    write(6, "(a)") &
-      "! ----------- Passed unittest_solver_timing ----------- !"
-  end subroutine unittest_solver_timing
-
   subroutine unittest_solver_convergence()
     integer :: i, m
-    integer :: nts, C
-    character(len = 256) :: scr_lne
-    
-!     ! Test spatial accuarcy (integrating to steady state)
-!     write(6, *) " Timestepping to steady state"
-!     write(6, *) " nts = 512*m "
-!     do i = 1, 8
-!       m = 2 ** (i+3)
-!       !write(6, *) "m(",i,") =", m, "; error(",i,") = ", compute_spatial_advection_err(m, 2)  ! 2: stat state
-!     end do
+    integer :: nts, C, split
+    character(len = 256) :: scr_lne, filename
     
     ! Test temporal accuarcy (periodic solution)
-    C = 128
-    open(unit = output_unit, file = "./unittest/convergence/log_LW_2.txt", &
-      & status = "replace", action = "write")
-    write(output_unit, "(a)") " Timestepping to periodic state"
-    write(output_unit, "(a)") " Scale dt = 1/C dx"
-    write(output_unit, "(a,i0,a)") " nts =", C,"*m"
-    do i = 1, 8
-      m = 2 ** (i+3)
-      nts = C* m
-      write(scr_lne, "(a,i0,a,i6,a,i0,a,i6,a,i0,a,"//dp_chr//")") &
-          "m(", i,") =", m,"; nts(",i,") =", nts,"; error(", i,") =", compute_temporal_err(m, nts)  ! 1: periodic
-      write(output_unit, *) trim(scr_lne)
-      
-      ! Print to screen
-      write(6, *) trim(scr_lne)
-      flush(6)
+    C = 8
+    
+#include "advdiff_configuration.h"
+    do split = 1, 2
+#if MC0LW1 == 0
+      write(filename, "(a,i0,a)") "./output/MC_split", split, ".txt"
+#elif MC0LW1 == 1
+      write(filename, "(a,i0,a)") "./output/LW_split", split, ".txt"
+#endif
+      open(unit = output_unit, file = trim(filename), &
+        & status = "replace", action = "write")
+      write(output_unit, "(a)") "% Timestepping to periodic state"
+      write(output_unit, "(a)") "% Scale dt = 1/C dx"
+      write(output_unit, "(a,i0,a)") "% nts =", C,"*m"
+      do i = 1, 8
+        m = 2 ** (i+3)
+        nts = C* m
+        write(scr_lne, "(a,i0,a,i6,a,i0,a,i6,a,i0,a,"//dp_chr//")") &
+            "m(", i,") =", m,"; nts(",i,") =", nts,"; error(", i,") =", compute_temporal_err(m, nts, split)
+        write(output_unit, *) trim(scr_lne)
+        
+        ! Print to screen
+        write(6, *) trim(scr_lne)
+        flush(6)
+      end do
+      close(output_unit)
     end do
-    close(output_unit)
     
     write(6, "(a)") &
-      "! ----------- Passed unittest_solver_properties ----------- !"
+      "! ----------- Passed unittest_solver_convergence ----------- !"
   end subroutine unittest_solver_convergence
   
-  real(kind=dp) function compute_spatial_err(m)
-    ! Source term: stationary, with lambda decay
-    !  S(x,y,t) = F(x,y)-lambda*(q_stat-q)
-    integer, intent(in) :: m
-    
-    type(field) :: q, K11, K22, K12, psi
-    integer :: n, i
+  real(kind=dp) function compute_temporal_err(m, nts, split)
+    integer, intent(in) :: m, nts, split
 
-    type(uv_signed) :: uv_fld
-    type(K_flux) :: K_e
-
-    integer, parameter :: gl = 1
-
-    real(kind=dp), parameter :: T = 16.0_dp
-    integer :: nts
-   
-    real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
-   
-    type(field) :: q_steady, q_err
-    real(kind=dp) :: err_int, dt
-    
-    nts = 512*m
-    n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(q_steady, m, n, 'q_steady', glayer=gl, type_id=2)
-    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=2)
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=2)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=2)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=2)
-
-    ! test_id = 2: q_steady
-    call testcase_fields(psi, K11, K22, K12, q_steady, 2)
-    call imposeBC(q_steady)
-    
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
-    
-    ! Set inital condition to zero
-    call zeros(q)
-    !call set(q, q_steady)
-    call imposeBC(q)
-    !call write(q, "./unittest/convergence/q", 0.0_dp, 0)
-    dt = T/real(nts,kind=dp)
-    do i = 1, nts
-      ! Strang splitting
-      ! A
-      !call timestep_fe_Kflux_Src_stat(q, dt, K_e, 1.0_dp)  ! Last argument = lambda
-      call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
-      ! B
-      call timestep_LMT_1DS(q, dt, uv_fld)
-
-      ! A
-      !call timestep_fe_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 1.0_dp)
-      call timestep_heun_Kflux_Src_stat(q, 0.5_dp*dt, K_e, 8.0_dp)
-    end do
-    call write(q, "./unittest/convergence/q_final", nts*dt, nts)
-    
-    ! Compare q with exact stat state
-    call addto(q, q_steady, -1.0_dp)
-    err_int = dsqrt(int_sq_field(q)/(m * n))
-
-    call deallocate(q)
-    call deallocate(q_steady)
-    call deallocate(q_err)
-    call deallocate(psi)
-
-    call deallocate(K11)
-    call deallocate(K22)
-    call deallocate(K12)
-
-    call deallocate(uv_fld)
-    call deallocate(K_e)
-    
-    compute_spatial_err = err_int
-  end function compute_spatial_err
-  
-  real(kind=dp) function compute_temporal_err(m, nts)
-    integer, intent(in) :: m, nts
-    
     type(field) :: q, K11, K22, K12, psi
     integer :: n, i
 
@@ -1035,7 +845,8 @@ contains
     integer, parameter :: gl = 1
 
     real(kind=dp), parameter :: Pi = 4.0_dp* datan (1.0_dp)
-    real(kind=dp), parameter :: T = 4.0_dp* datan (1.0_dp)
+!     real(kind=dp), parameter :: T = 0.1_dp * 2.0_dp
+    real(kind=dp), parameter :: T = 1.0_dp
    
     type(field) :: q_exact, q_err
     real(kind=dp) :: t_i, err_int, err_sup, dt
@@ -1051,20 +862,13 @@ contains
     call allocate(K12, m, n, 'K12', glayer=0, type_id=1)
 
     ! test_id = 1: q(t) 1-periodic
-    call testcase_fields(psi, K11, K22, K12, q_exact, 1)
-    call imposeBC(q_exact)
-    
-!     ! Turn off diffusion
-!     K11%data = 0.0_dp
-!     K22%data = 0.0_dp
-!     K12%data = 0.0_dp
+    call testcase_fields(psi, K11, K22, K12, q_exact)
     
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
     
     ! Set inital condition to zero
-    call set(q, q_exact)
+    call assign_q_periodic(q, 0.0_dp)
     call imposeBC(q)
     
     err_sup = 0.0_dp
@@ -1074,15 +878,7 @@ contains
     do i = 1, nts
       t_i = real(i-1, kind=dp)*dt
       
-      ! Strang splitting
-      ! A
-      call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
-      !call timestep_heun_Kflux_Src_nonstat(q, dt, t_i, K_e)
-      ! B
-      call timestep_LMT_2D(q, dt, uv_fld)
-      !call timestep_LaxWendoff(q, dt, uv_fld)
-      ! A
-      call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i+0.5_dp*dt, K_e)
+      call splitting_scheme(q, dt, t_i, uv_fld, K_e, split)
       
       call set(q_err, q)
       ! Compare q with exact stat state
@@ -1095,37 +891,7 @@ contains
     end do
     
 !     call write(q, "./unittest/convergence/q_final", nts*dt, nts)
-
-!     ! (1/2A)BAB..AB(1/2A)
-!     dt = T/real(nts,kind=dp)
-!     ! Strang splitting
-!     ! A/2
-!     t_i = 0.0_dp
-!     call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
-!     
-!     ! (BA)^(nts-1) 
-!     do i = 1, (nts-1)
-!       t_i = real(i-1, kind=dp)*dt
-!       call timestep_LMT_2D(q, dt, uv_fld)
-!       !call timestep_LaxWendoff(q, dt, uv_fld)
-!       call timestep_heun_Kflux_Src_nonstat(q, dt, t_i+0.5_dp*dt, K_e)
-!     end do
-!     
-!     ! B(A/2)
-!     t_i = real(nts-1, kind=dp)*dt
-!     call timestep_LMT_2D(q, dt, uv_fld)
-!     call timestep_heun_Kflux_Src_nonstat(q, 0.5_dp*dt, t_i+0.5_dp*dt, K_e)
-! 
-!     ! Calculate error at final time
-!     call set(q_err, q)
-!     ! Compare q with exact stat state
-!     call assign_q_periodic(q_exact, T)
-!     call imposeBC(q_exact)
-!     call addto(q_err, q_exact, -1.0_dp)
-!     err_int = dsqrt(int_sq_field(q_err)/(m * n))
-!     
-!     err_sup = max(err_int, err_sup)
-      
+    
     call deallocate(q)
     call deallocate(q_exact)
     call deallocate(q_err)
@@ -1140,6 +906,26 @@ contains
     
     compute_temporal_err = err_sup
   end function compute_temporal_err
+  
+  subroutine splitting_scheme(q, dt, t_i, uv_fld, K_e, split)
+    type(field), intent(inout) :: q
+    real(kind = dp), intent(in) :: dt, t_i
+    type(uv_signed), intent(in) :: uv_fld
+    type(K_flux), intent(in) :: K_e
+    integer, intent(in) :: split
+
+    if (split .eq. 2) then
+      ! Strang splitting ABA
+      call timestep_heun_K_Src_nonstat(q, 0.5_dp*dt, t_i, K_e)
+      call timestep_LMT_2D(q, dt, uv_fld)
+      call timestep_heun_K_Src_nonstat(q, 0.5_dp*dt, t_i+0.5_dp*dt, K_e)
+    elseif (split .eq. 1) then
+      ! 1st order splitting AB
+      call timestep_heun_K_Src_nonstat(q, dt, t_i, K_e)
+      call timestep_LMT_2D(q, dt, uv_fld)
+    end if
+    
+  end subroutine splitting_scheme
   
   subroutine unittest_IO()
     type(trajdat) :: traj
@@ -1259,7 +1045,6 @@ contains
     real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
     real(kind=dp) :: sc, h, dt
     integer :: nts, dt_rf
-    real(kind=dp), dimension(:), allocatable :: logPost
 
     integer, parameter :: Td = 32
     character(len = *), parameter :: RunProfile = "QGM2_L1_NPART2704"
@@ -1407,46 +1192,6 @@ contains
     call deallocate(dof_old)
     deallocate(theta_old)
     deallocate(theta)
-
-
-    ! Evaluate likelihood
-    allocate(logPost(IndFn%nIND))
-    
-!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-!     SlogPost = real(sum(logPost), kind=dp)
-!     write(6, *) "3hr@Posterior = ", SlogPost
-!     
-!     ! Smaller timestep
-!     nts = nts*8
-!     logPost = 0.0_dp
-!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-!     SlogPostr = real(sum(logPost), kind=dp)
-!     write(6, *) "0.375hr@Posterior = ", SlogPostr
-!       
-!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
-!     alphaUniRV = dexp(SlogPostr-SlogPost)
-!     write(6, *) "Relative acceptance = ", alphaUniRV
-!     
-!     ! Perturb dof
-!     call deallocate(dof)
-!     call read_theta(dof, trim(output_fld)//"theta_sine", sc, 124)
-!     nts = 256*4
-!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-!     SlogPostr = real(sum(logPost), kind=dp)
-!     write(6, *) "Perturb dof@Posterior = ", SlogPostr
-!     
-!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
-!     write(6, *) "Relative acceptance = ", alphaUniRV
-! 
-!     nts = 256*8*4
-!     call evaluate_loglik_OMP(logPost, jumps, IndFn, mesh, dof, h, nts)
-!     SlogPostr = real(sum(logPost), kind=dp)
-!     write(6, *) "1hr@Posterior = ", SlogPostr
-!     
-!     alphaUniRV = dabs((SlogPost - SlogPostr)/SlogPost)
-!     write(6, *) "Relative acceptance = ", alphaUniRV
-    
-    deallocate(logPost)
     call deallocate(jumps)
     call deallocate(q)
     deallocate(klist)
@@ -1457,276 +1202,61 @@ contains
 
   end subroutine unittest_FPsolver_INPUT
   
-  subroutine unittest_TG_instability()
-    use omp_lib
-    type(jumpsdat), dimension(:), allocatable :: jumps
-    type(trajdat) :: traj
-
-    integer :: m, n, m_solver, m_Ind, n_Ind
-    type(meshdat) :: mesh
-
-    type(dofdat) :: dof
-    type(IndFndat) :: IndFn
-
-    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
-    real(kind=dp), parameter :: kappa_scale = 10000.0_dp
-    real(kind=dp), parameter :: psi_scale = 100.0_dp*1000.0_dp
-    real(kind=dp) :: sc, h, dt
-    integer :: nts
-
-    integer, parameter :: Td = 1
-    character(len = *), parameter :: RunProfile = "zero_const"
-    character(len = 256) :: output_fld, Td_char, resol_param
-
-    ! Extra variables
-    integer :: niter = 500
-    real(kind=dp), dimension(:), allocatable :: stdnRV_a, stdnRV_kappa
-    type(dofdat) :: dof_solver  ! Refined dof for solver
-    real(kind=dp) :: kappa, a16, logLik
-    real(kind=dp) :: kappa_old, a16_old, logLik_old
-    character(len = 256) :: scrstr
-    integer :: i, j, k, wavenumber
-    type(field) :: q
-    character(len = 256) ::output_q
-
+  subroutine unittest_interpolation()
+    real(kind=dp), dimension(:,:), allocatable :: in, out, exact
+    integer :: m, n, Mx, My
     
-    ! m, n: DOF/control
-    m = 1
-    n = 1
-    ! m_solver: solver grid
-    m_solver = 128
-    ! m_Ind, n_Ind: indicator functions
-    m_Ind = 1
-    n_Ind = m_Ind
+    integer :: i, j, type_id
+    real(kind=dp) :: x, y
     
-    write(Td_char, "(a,i0,a)") "h", Td, "d"
-    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
-    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
-    write(6, "(a, a)") "Output path: ", trim(output_fld)
+    m = 4
+    n = 4
+    Mx = 4
+    My = 4
+    type_id = 1   ! Defined at corners
     
-    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
-    call allocate(dof, m, n, 1, 1) 
-    ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
-    call allocate(IndFn, m_Ind, n_Ind)
-
-    ! Initialise fields
-    sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call init_dof(dof, sc)
-
-    ! Read trajectory
-    call read(traj, "./trajdat/"//RunProfile//"/"//trim(Td_char))
-
-    ! Ensure the positions are normalised
-    if (.not. check_normalised_pos(traj)) then
-      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
-    end if
-
-    ! Allocate array of jumps with initial positions
-    call allocate(jumps, mesh)
-
-    ! Convert trajectory into jumps
-    call traj2jumps(jumps, traj, mesh)
-    call deallocate(traj)
+    allocate(in(m+1, n+1))
+    allocate(out(m*Mx+1, n*My+1))
+    allocate(exact(m*Mx+1, n*My+1))
     
-    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
-    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
-
-    ! Calculate nts = number of timesteps needed in solving FP
-    dt = 0.01_dp*3600.0_dp  ! 3 hours, in seconds
-    nts = int((h/sc)/dt)    ! 2 hours time step
-
-    ! Print info to screen
-    call print_info(mesh)
-    call print_info(dof)
-    call print_info(IndFn)
-    call print_info(h, nts, sc)
-!     call print_info(jumps, mesh)
-    
-    call allocate(dof_solver, mesh)
-    
-    ! Look for a MLE by random walk
-    wavenumber = 16
-    
-    a16_old = 2.0_dp*L *sc
-    kappa_old = 100.0_dp * L *sc/100.0_dp
-    kappa_old = 1.0_dp * L *sc/100.0_dp
-    
-    call set(dof_solver%psi, 0.0_dp)
-    call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
-      
-    call set(dof_solver%K11, kappa)
-    call set(dof_solver%K22, kappa)
-    call set(dof_solver%K12, 0.0_dp)
-    
-    logLik_old = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-
-    allocate(stdnRV_a(niter))
-    allocate(stdnRV_kappa(niter))
-    call randn(stdnRV_a, SEED)
-    call randn(stdnRV_kappa, SEED)
-    
-    do k = 1, niter
-      a16 = a16_old*(1.0_dp + 0.1_dp*stdnRV_a(k))
-      kappa = kappa_old*(1.0_dp + 0.1_dp*stdnRV_kappa(k))
-    
-      ! Only need to pass the interior points
-      call set(dof_solver%psi, 0.0_dp)
-      call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
-      
-      call set(dof_solver%K11, kappa)
-      call set(dof_solver%K22, kappa)
-      call set(dof_solver%K12, 0.0_dp)
-      
-      logLik = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-      
-!       write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
-!           "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
-!       write(6, *) trim(scrstr)
-      
-      if (logLik .gt. logLik_old) then
-        a16_old = a16
-        kappa_old = kappa
-        logLik_old = logLik
-        
-        
-        write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
-          "arr(", k, ",:)= [", a16, ",",  kappa, ", ", logLik, "]"
-        write(6, *) trim(scrstr)
-        flush(6)
-      end if
-    end do
-    
-    
-    !! Output video for MLE
-    write(6, *) "Output video"
-    a16 = a16_old
-    kappa = kappa_old
-    
-    ! Only need to pass the interior points
-    call set(dof_solver%psi, 0.0_dp)
-    call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), wavenumber, a16)
-      
-    call set(dof_solver%K11, kappa)
-    call set(dof_solver%K22, kappa)
-    call set(dof_solver%K12, 0.0_dp)
-
-    call print_info(dof_solver%psi, h/nts)
-
-    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
-
-    call initialise_q_Gaussian(q)
-    call imposeBC(q)
-    
-    write(output_q, "(a)") "./unittest/cellular/q"
-    call write(q, trim(output_q), 0.0_dp, 0)
-    
-    do i = 1, nts
-      call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h/nts, 1)
-      call write(q, trim(output_q), (h/sc)/nts*i, i)
-      if (mod(i, nts/10) .eq. 0) then
-        write(6, *) i, " out of ", nts
-        flush(6)
-      end if
-    end do
-    
-    call deallocate(q)
-    deallocate(stdnRV_a)
-    deallocate(stdnRV_kappa)
-    
-    write(6, "(a)") "a16, kappa, logLik"
-    
-    k = 0
-    do i = 1, 10
-      do j = 1, 10
-        k = k + 1
-        a16 = 1.0_dp * real(i-1, kind=dp) *sc
-        kappa = 0.01_dp * real(j, kind=dp) *sc
-        
-        ! Only need to pass the interior points
-        call set(dof_solver%psi, 0.0_dp)
-        call sine_basis(dof_solver%psi%data(2:dof_solver%psi%m, 2:dof_solver%psi%n), 16 , a16)
-        
-        call set(dof_solver%K11, kappa)
-        call set(dof_solver%K22, kappa)
-        call set(dof_solver%K12, 0.0_dp)
-        
-        dof_solver%SlogPost = eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-        
-        write(scrstr, "(a,i0,a,"//sp_chr//",a,"//sp_chr//",a,"//dp_chr//",a)") &
-          "arr(", k, ",:)= [", a16, ",",  kappa, ", ", dof_solver%SlogPost, "]"
-        write(6, *) trim(scrstr)
+    ! Evaluate input
+    do j = 1, size(in, 2)
+      do i = 1, size(in, 1)
+        x = fld_x(i, m, type_id)  ! in [0, 1]
+        y = fld_x(j, n, type_id)  ! in [0, 1]
+        in(i, j) = testcase_intpl(x, y)
       end do
     end do
     
-    ! Release memory
-    call deallocate(dof_solver)
+    ! Perform interpolation
+    call bilinear_intpl(out, in, Mx, My)
     
-    call deallocate(dof)
-    call deallocate(IndFn)
-    call deallocate(jumps)
+    ! Evaluate exact field
+    do j = 1, size(exact, 2)
+      do i = 1, size(exact, 1)
+        x = fld_x(i, size(exact,1)-1, type_id)  ! in [0, 1]
+        y = fld_x(j, size(exact,2)-1, type_id)  ! in [0, 1]
+        exact(i, j) = testcase_intpl(x, y)
+      end do
+    end do
+    
+    if (.not. iszero(out-exact)) then
+      call abort_handle("Bilinear interpolator broke.", __FILE__, __LINE__)
+    end if
+    
+    deallocate(exact)
+    deallocate(out)
+    deallocate(in)
     
     write(6, "(a)") &
-    "! ----------- Passed unittest_TG_instability ----------- !"
-
-  end subroutine unittest_TG_instability
+      "! ----------- Passed unittest_interpolation ----------- !"
+  end subroutine unittest_interpolation
   
-  real(kind=dp) function eval_Gaussian_loglik(jumps, mesh, dof_solver, h, nts)
-    type(jumpsdat), dimension(:), allocatable, intent(in) :: jumps
-    type(meshdat), intent(in) :: mesh
-    type(dofdat), intent(in) :: dof_solver
-    real(kind=dp), intent(in) :: h
-    integer, intent(in) :: nts
-
-    type(field) :: q
-    integer :: jump
-    real(kind=dp) :: lik
-    integer :: k_i
-
-    eval_Gaussian_loglik = 0.0_dp
-
-    ! Find out the cells corresponding to the indicator function
-    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+  pure real(kind=dp) function testcase_intpl(x, y)
+    real(kind=dp), intent(in) :: x, y
     
-    ! Solve FK equation
-    call initialise_q_Gaussian(q)
-    call imposeBC(q)
-    call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, nts)
-    
-    ! Evaluate likelihood
-    do k_i = 1, mesh%m*mesh%n
-      do jump = 1, jumps(k_i)%njumps
-        ! Bilinear interpolations
-        lik = eval_fldpt(q, mesh, jumps(k_i)%k_f(jump), jumps(k_i)%alpha_f(:,jump))
-        ! Set the negative probability to be 1e-16
-        lik = max(1e-16, lik)
-        eval_Gaussian_loglik = eval_Gaussian_loglik + dlog(lik)
-      end do
-    end do
-
-    call deallocate(q)
-    
-  end function eval_Gaussian_loglik
-  
-  subroutine initialise_q_Gaussian(q)
-    type(field), intent(inout) :: q
-    
-    integer :: i, j, gl
-    real(kind=dp) :: x, y, Sigma0
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    gl = q%glayer
-    Sigma0 = 0.05_dp
-    do j = 1, q%n
-        do i = 1, q%m
-          ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
-          x = fld_x(i, q%m, q%type_id)
-          y = fld_x(j, q%n, q%type_id)
-          
-          q%data(i+gl, j+gl) = dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.5_dp)**2)/Sigma0**2)/(2.0_dp*Pi*Sigma0**2)
-        end do
-      end do
-    
-  end subroutine initialise_q_Gaussian
+    testcase_intpl = 2.0_dp * x + 3.0_dp * y
+  end function testcase_intpl
   
 end module advdiff_unittest
 

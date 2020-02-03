@@ -13,14 +13,12 @@ module advdiff_timestep
   public :: imposeBC
   public :: advdiff_q
 
-  public :: timestep_heun_Kflux, timestep_fe_Kflux
-  public :: timestep_fe_Kflux_Src_stat, timestep_fe_Kflux_Src_nonstat
-  public :: timestep_heun_Kflux_Src_stat, timestep_heun_Kflux_Src_nonstat
-  public :: timestep_LMT_1DS, timestep_LaxWendoff
+  public :: timestep_heun_K
+  public :: timestep_heun_K_Src_nonstat
   public :: timestep_LMT_2D
 
   interface imposeBC
-    module procedure imposeBC_q, imposeBC_FG, imposeBC_Kflux
+    module procedure imposeBC_q, imposeBC_FG
   end interface imposeBC
 
   interface print_info
@@ -73,21 +71,14 @@ contains
     end do
 
   end subroutine assemble_G_DCU
-
-  ! Corner transport upwind
-  subroutine assemble_FG_CTU(F,G, dqx, dqy, uv_fld, dt)
+  
+  subroutine assemble_FG_CTU(F, G, dqx, dqy, lup, lum, lvp, lvm, dt)
     real(kind=dp), dimension(:,:), intent(inout) :: F,G
     real(kind=dp), dimension(:,:), intent(in) :: dqx, dqy
-    type(uv_signed), intent(in) :: uv_fld
+    real(kind = dp), dimension(:, :), pointer, intent(in) :: lup, lum, lvp, lvm
     real(kind=dp), intent(in) :: dt
 
     integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: lup, lum, lvp, lvm
-    
-    lup => uv_fld%up
-    lum => uv_fld%um
-    lvp => uv_fld%vp
-    lvm => uv_fld%vm
 
     if ( (size(F,1) .ne. size(dqx, 1)) .or. (size(F,2) .ne. size(dqx, 2)) ) then
       call abort_handle("F, dqx: Incompatible size", __FILE__, __LINE__)
@@ -153,26 +144,14 @@ contains
   pure real(kind=dp) function philim(theta)
     real(kind=dp), intent(in) :: theta
 
-    ! minmod
-    !philim = max(0.0_dp, min(1.0_dp, theta))
-
-    ! Superbee
-    !philim = max(0.0_dp, min(1.0_dp, 2.0_dp*theta), min(2.0_dp, theta))
-
+#include "advdiff_configuration.h"
+#if MC0LW1 == 0
     ! MC
     philim = max(0.0_dp, min(0.5_dp*(1.0_dp+theta), 2.0_dp, 2.0_dp*theta))
-
-    ! Sweby
-    !philim = max(0.0_dp, min(1.0_dp, 1.5_dp*theta), min(1.5_dp, theta))
-    
-    ! Lax-Wendoff
-    !philim = 1.0_dp
-    
-    ! Beam-Warming
-    !philim = theta
-    
-    ! Upwind scheme
-    !philim = 0.0_dp
+#elif MC0LW1 == 1
+    ! Lax-Wendroff
+    philim = 1.0_dp
+#endif
 
   end function philim
 
@@ -220,106 +199,10 @@ contains
     end do
 
   end subroutine assemble_G_limiter
-  
-  subroutine assemble_F_LW(F, q, uv_fld, dt)
-    real(kind=dp), dimension(:,:), intent(inout) :: F
-    type(field), intent(in) :: q
-    type(uv_signed), intent(in) :: uv_fld
-    real(kind=dp), intent(in) :: dt
-
-    integer :: i, j, gl
-
-    integer, dimension(:, :), pointer :: lu_sgn
-    real(kind = dp), dimension(:, :), pointer :: lum, lup, lu_abs, lq
-
-
-    lq => q%data
-    gl = q%glayer
-    
-    lum => uv_fld%um
-    lup => uv_fld%up
-    lu_sgn => uv_fld%u_sgn
-    lu_abs => uv_fld%u_abs
-
-    ! LeVeque p119
-    !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
-    do j = 1, size(F, 2)
-      do i = 2, size(F, 1)-1
-        F(i,j) = lum(i,j)*lq(i+gl, j+gl) + lup(i,j)*lq(i+gl-1, j+gl) &  ! Upwind
-                + 0.5_dp *lu_abs(i,j)*(1.0_dp-dt*lu_abs(i,j)) *(lq(i+gl, j+gl)-lq(i+gl-1, j+gl))
-                ! Correction
-      end do
-    end do
-
-  end subroutine assemble_F_LW
-  
-  subroutine assemble_G_LW(G, q, uv_fld, dt)
-    real(kind=dp), dimension(:,:), intent(inout) :: G
-    type(field), intent(in) :: q
-    type(uv_signed), intent(in) :: uv_fld
-    real(kind=dp), intent(in) :: dt
-
-    integer :: i, j, gl
-
-    integer, dimension(:, :), pointer :: lv_sgn
-    real(kind = dp), dimension(:, :), pointer :: lvm, lvp, lv_abs, lq
-    
-    lq => q%data
-    gl = q%glayer
-    
-    lvm => uv_fld%vm
-    lvp => uv_fld%vp
-    lv_sgn => uv_fld%v_sgn
-    lv_abs => uv_fld%v_abs
-
-    ! LeVeque p119
-    !! u(i,j) aligned with F(i,j) & dqx(i,j); v(i,j) aligned with G(i,j) & dqy(i,j)
-    do j = 2, size(G, 2)-1
-      do i = 1, size(G, 1)
-        G(i,j) = lvm(i,j)*lq(i+gl, j+gl) + lvp(i,j)*lq(i+gl, j+gl-1) & ! Upwind
-                + 0.5_dp *lv_abs(i,j)*(1.0_dp-dt*lv_abs(i,j)) *(lq(i+gl, j+gl)-lq(i+gl, j+gl-1))
-                ! Correction
-      end do
-    end do
-
-  end subroutine assemble_G_LW
-  
-  subroutine imposeBC_Kflux(K_e)
-    type(K_flux), intent(inout) :: K_e
-    integer :: m, n, i, j
-
-    m = size(K_e%K22e, 1)
-    n = size(K_e%K11e, 2)
-
-    ! Set diffusivity at domain boundaries to be zero to enforce zero flux
-    do j = 1, n
-      K_e%K11e(1,j) = 0.0_dp
-      K_e%K12e(1,j) = 0.0_dp
-      K_e%K11e(m+1,j) = 0.0_dp
-      K_e%K12e(m+1,j) = 0.0_dp
-    end do
-
-    do i = 1, m
-      K_e%K21e(i,1) = 0.0_dp
-      K_e%K22e(i,1) = 0.0_dp
-      K_e%K21e(i,n+1) = 0.0_dp
-      K_e%K22e(i,n+1) = 0.0_dp
-    end do
-
-  end subroutine imposeBC_Kflux
 
   subroutine imposeBC_FG(F, G)
     real(kind=dp), dimension(:,:), intent(inout) :: F, G
-
-    ! Set flux at domain boundaries to be zero
-    call imposeBC_F(F)
-    call imposeBC_G(G)
-    
-  end subroutine imposeBC_FG
-
-  subroutine imposeBC_F(F)
-    real(kind=dp), dimension(:,:), intent(inout) :: F
-    integer :: j
+    integer :: j, i
 
     ! Set flux at domain boundaries to be zero
     do j = 1, size(F, 2)
@@ -327,19 +210,12 @@ contains
       F(size(F, 1),j) = 0.0_dp
     end do
 
-  end subroutine imposeBC_F
-
-  subroutine imposeBC_G(G)
-    real(kind=dp), dimension(:,:), intent(inout) :: G
-    integer :: i
-
-    ! Set flux at domain boundaries to be zero
     do i = 1, size(G, 1)
       G(i,1) = 0.0_dp
       G(i,size(G, 2)) = 0.0_dp
     end do
-
-  end subroutine imposeBC_G
+    
+  end subroutine imposeBC_FG
   
   subroutine imposeBC_q(q)
     type(field), intent(inout) :: q
@@ -367,47 +243,50 @@ contains
 
   end subroutine imposeBC_q
   
-  ! Consider the ghost point
-  subroutine eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e)
-    ! 5-point stencil: ignore off diagonal terms
-    ! Wrong BC??
+  subroutine eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e)
     type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
 
     real(kind=dp), dimension(:,:) :: K11e, K12e, K21e, K22e
-
-    integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-
-    integer :: gl   ! ghost layer
-
-    lq => q%data
-    ldqdt => dqdt%data
-
-    gl = q%glayer
-
-    ! 9points_Laplacian_FVM.mw
-    do j = 1, q%n
-      do i = 1, q%m
-        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) -( K11e(i+1,j) + K11e(i,j) + K22e(i,j+1) + K22e(i,j) ) *lq(i+gl, j+gl) &
-                    + ( K11e(i+1,j) + 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i+1+gl,j+gl) &
-                    + ( K11e(i  ,j) - 0.25_dp*(K21e(i,j+1) - K21e(i,j)) ) *lq(i-1+gl,j+gl) &
-                    + ( K22e(i,j+1) + 0.25_dp*(K12e(i+1,j) - K12e(i,j)) ) *lq(i+gl,j+1+gl) &
-                    + ( K22e(i,j  ) - 0.25_dp*(K12e(i+1,j) - K12e(i,j)) ) *lq(i+gl,j-1+gl) &
-                    + ( K12e(i+1,j) + K21e(i,j+1) )* 0.25_dp *lq(i+1+gl,j+1+gl) &
-                    - ( K12e(i+1,j) + K21e(i,j  ) )* 0.25_dp *lq(i+1+gl,j-1+gl) &
-                    - ( K12e(i  ,j) + K21e(i,j+1) )* 0.25_dp *lq(i-1+gl,j+1+gl) &
-                    + ( K12e(i  ,j) + K21e(i,j  ) )* 0.25_dp *lq(i-1+gl,j-1+gl)
-      end do
-    end do
+    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx_F, dqy_F, dqx_G, dqy_G
     
-  end subroutine eval_dqdt_Kfull
+    allocate(F(q%m+1, q%n))
+    allocate(G(q%m, q%n+1))
+    
+    ! Evaluate F
+    allocate(dqx_F(q%m+1, q%n))
+    allocate(dqy_F(q%m+1, q%n))
+    
+    call dx_field(dqx_F, q)
+    call dy_field_VertEdge(dqy_F, q)
+    F = -(K11e * dqx_F + K12e * dqy_F)
+    
+    deallocate(dqy_F)
+    deallocate(dqx_F)
+
+    ! Evaluate G
+    allocate(dqx_G(q%m, q%n+1))
+    allocate(dqy_G(q%m, q%n+1))
+    
+    call dx_field_HoriEdge(dqx_G, q)
+    call dy_field(dqy_G, q)
+    G = -(K21e * dqx_G + K22e * dqy_G)
+    
+    deallocate(dqy_G)
+    deallocate(dqx_G)
+    
+    ! Evaluate dqdt
+    call imposeBC(F, G)
+    call eval_dqdt_FG(dqdt, q, F, G)
+    
+    deallocate(G)
+    deallocate(F)
+    
+  end subroutine eval_dqdt_K
   
-    ! Consider the ghost point
   subroutine eval_dqdt_FG(dqdt, q, F, G)
-    ! 5-point stencil: ignore off diagonal terms
     ! Assumed zero flux BC
-    type(field), intent(out) :: dqdt
+    type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
 
     real(kind=dp), dimension(:,:) :: F, G
@@ -423,7 +302,7 @@ contains
 
     do j = 1, q%n
       do i = 1, q%m
-        ldqdt(i+gl,j+gl) = -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
+        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
       end do
     end do
     
@@ -432,63 +311,8 @@ contains
     
   end subroutine eval_dqdt_FG
   
-  subroutine eval_dqdt_F(dqdt, q, F)
-    ! 5-point stencil: ignore off diagonal terms
-    ! Assumed zero flux BC
-    type(field), intent(out) :: dqdt
-    type(field), intent(in) :: q
-    real(kind=dp), dimension(:,:), intent(in) :: F
-
-    integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-
-    integer :: gl   ! ghost layer
-
-    lq => q%data
-    ldqdt => dqdt%data
-    gl = q%glayer
-
-    do j = 1, q%n
-      do i = 1, q%m
-        ldqdt(i+gl,j+gl) = -F(i+1,j) +F(i,j)
-      end do
-    end do
-    
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
-    
-  end subroutine eval_dqdt_F
-  
-  subroutine eval_dqdt_G(dqdt, q, G)
-    ! 5-point stencil: ignore off diagonal terms
-    ! Assumed zero flux BC
-    type(field), intent(out) :: dqdt
-    type(field), intent(in) :: q
-    real(kind=dp), dimension(:,:), intent(in) :: G
-
-    integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-
-    integer :: gl   ! ghost layer
-
-    lq => q%data
-    ldqdt => dqdt%data
-    gl = q%glayer
-
-    do j = 1, q%n
-      do i = 1, q%m
-        ldqdt(i+gl,j+gl) = -G(i,j+1) +G(i,j)
-      end do
-    end do
-    
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
-    
-  end subroutine eval_dqdt_G
-  
   ! Consider the ghost point
   subroutine eval_dqdt_scr_nonstat(dqdt, q, t)
-    ! 5-point stencil: ignore off diagonal terms
     ! Assumed zero flux BC
     type(field), intent(out) :: dqdt
     type(field), intent(in) :: q
@@ -516,39 +340,6 @@ contains
     call imposeBC(dqdt)
 
   end subroutine eval_dqdt_scr_nonstat
-  
-    ! Consider the ghost point
-  subroutine eval_dqdt_scr_stat(dqdt, q, lambda)
-    ! 5-point stencil: ignore off diagonal terms
-    ! Assumed zero flux BC
-    type(field), intent(out) :: dqdt
-    type(field), intent(in) :: q
-    real(kind = dp), intent(in) :: lambda
-    
-    integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-    
-    integer :: gl   ! ghost layer
-    real(kind = dp) :: x, y, qxy
-
-    lq => q%data
-    ldqdt => dqdt%data
-    gl = q%glayer
-    
-    do j = 1, q%n
-      do i = 1, q%m
-        x = fld_x(i, q%m, q%type_id)
-        y = fld_x(j, q%n, q%type_id)
-        qxy = lq(i+gl,j+gl)
-        ldqdt(i+gl,j+gl) = S_rhs_stat(x,y, qxy, lambda)
-      end do
-    end do
-    
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
-
-  end subroutine eval_dqdt_scr_stat
 
   subroutine timestep_fe(q, dqdt, dt)
     type(field), intent(inout) :: q
@@ -570,7 +361,7 @@ contains
 
   end subroutine timestep_fe
   
-  subroutine timestep_heun_Kflux(q, dt, K_e)
+  subroutine timestep_heun_K(q, dt, K_e)
     ! Heun's method
     type(field), intent(inout) :: q
     type(K_flux), intent(in) :: K_e
@@ -592,15 +383,15 @@ contains
 
     ! Evaluate dqdt and copy q to qc
     call zeros(dqdt)
-    call eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e)
     call set(qc, q)
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
     call imposeBC(qc)
 
-    ! Correction step (add to dqdt, not rewriting it)
-    call eval_dqdt_Kfull(dqdt, qc, K11e, K12e, K21e, K22e)
+    ! Correction step (add to dqdt)
+    call eval_dqdt_K(dqdt, qc, K11e, K12e, K21e, K22e)
     
     ! Full timestepping
     call timestep_fe(q, dqdt, 0.5_dp*dt)
@@ -609,59 +400,9 @@ contains
     call deallocate(dqdt)
     call deallocate(qc)
 
-  end subroutine timestep_heun_Kflux
+  end subroutine timestep_heun_K
   
-  subroutine timestep_fe_Kflux(q, dt, K_e)
-    ! Heun's method
-    type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: dt
-
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
-    type(field) :: dqdt
-
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
-    ! Evaluate dqdt and copy q to qc
-    call zeros(dqdt)
-    call eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e)
-    call timestep_fe(q, dqdt, dt)
-    call imposeBC(q)
-
-    call deallocate(dqdt)
-
-  end subroutine timestep_fe_Kflux
-  
-  subroutine eval_dqdt_Kfull_scr_stat(dqdt, q, K11e, K12e, K21e, K22e, lambda)
-    type(field), intent(inout) :: dqdt, q
-    real(kind = dp), dimension(:,:), intent(in) :: K11e, K12e, K21e, K22e
-
-    real(kind = dp), intent(in) :: lambda
-
-    type(field) :: dqdt_S
-    
-    call allocate(dqdt_S, q%m, q%n, 'dqdt_S', glayer=q%glayer, type_id=q%type_id)
-
-    call zeros(dqdt)
-    call eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e) ! From diffusion
-
-    call zeros(dqdt_S)
-    call eval_dqdt_scr_stat(dqdt_S, q, lambda) ! From source term
-
-    call addto(dqdt, dqdt_S, 1.0_dp)
-    
-    call deallocate(dqdt_S)
-    
-  end subroutine eval_dqdt_Kfull_scr_stat
-  
-  subroutine eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
+  subroutine eval_dqdt_K_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
     type(field), intent(inout) :: dqdt, q
     real(kind = dp), dimension(:,:), intent(in) :: K11e, K12e, K21e, K22e
 
@@ -672,7 +413,7 @@ contains
     call allocate(dqdt_S, q%m, q%n, 'dqdt_S', glayer=q%glayer, type_id=q%type_id)
 
     call zeros(dqdt)
-    call eval_dqdt_Kfull(dqdt, q, K11e, K12e, K21e, K22e) ! From diffusion
+    call eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e) ! From diffusion
 
     call zeros(dqdt_S)
     call eval_dqdt_scr_nonstat(dqdt_S, q, t) ! From source term
@@ -681,111 +422,9 @@ contains
     
     call deallocate(dqdt_S)
     
-  end subroutine eval_dqdt_Kfull_scr_nonstat
+  end subroutine eval_dqdt_K_scr_nonstat
   
-  subroutine timestep_fe_Kflux_Src_stat(q, dt, K_e, lambda)
-    type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: dt
-    real(kind = dp), intent(in) :: lambda
-
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
-    type(field) :: dqdt
-
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
-    ! Evaluate dqdt
-    call eval_dqdt_Kfull_scr_stat(dqdt, q, K11e, K12e, K21e, K22e, lambda)
-    
-    call timestep_fe(q, dqdt, dt)
-    call imposeBC(q)
-
-    call deallocate(dqdt)
-    
-  end subroutine timestep_fe_Kflux_Src_stat
-  
-  subroutine timestep_heun_Kflux_Src_stat(q, dt, K_e, lambda)
-    ! Heun's method
-    type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: dt, lambda
-
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
-    type(field) :: dqdt
-    type(field) :: qc
-    type(field) :: dqdtc
-
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-    call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
-    call allocate(dqdtc, q%m, q%n, 'dqdtc', glayer=q%glayer, type_id=q%type_id)
-
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
-    ! Evaluate dqdt and copy q to qc
-    call zeros(dqdt)
-    call eval_dqdt_Kfull_scr_stat(dqdt, q, K11e, K12e, K21e, K22e, lambda)
-    call set(qc, q)
-
-    ! Prediction step
-    call timestep_fe(qc, dqdt, dt)
-    call imposeBC(qc)
-
-    ! Correction step
-    call zeros(dqdtc)
-    call eval_dqdt_Kfull_scr_stat(dqdt, q, K11e, K12e, K21e, K22e, lambda)
-    call addto(dqdt, dqdtc, 1.0_dp)
-
-    ! Full timestepping
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
-
-    call deallocate(dqdt)
-    call deallocate(qc)
-    call deallocate(dqdtc)
-
-  end subroutine timestep_heun_Kflux_Src_stat
-  
-  subroutine timestep_fe_Kflux_Src_nonstat(q, dt, t, K_e)
-    ! Heun's method
-    type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: dt, t
-
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
-    type(field) :: dqdt
-
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
-    ! Evaluate dqdt
-    call eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
-    
-    call timestep_fe(q, dqdt, dt)
-    call imposeBC(q)
-
-    call deallocate(dqdt)
-    
-  end subroutine timestep_fe_Kflux_Src_nonstat
-  
-  subroutine timestep_heun_Kflux_Src_nonstat(q, dt, t, K_e)
+  subroutine timestep_heun_K_Src_nonstat(q, dt, t, K_e)
     ! Heun's method
     type(field), intent(inout) :: q
     type(K_flux), intent(in) :: K_e
@@ -810,7 +449,7 @@ contains
     ! Evaluate dqdt and copy q to qc
     call set(qc, q)
     call zeros(dqdt)
-    call eval_dqdt_Kfull_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
@@ -818,7 +457,7 @@ contains
 
     ! Correction step
     call zeros(dqdtc)
-    call eval_dqdt_Kfull_scr_nonstat(dqdtc, qc, t+dt, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K_scr_nonstat(dqdtc, qc, t+dt, K11e, K12e, K21e, K22e)
     call addto(dqdt, dqdtc, 1.0_dp)
 
     ! Full timestepping
@@ -829,107 +468,7 @@ contains
     call deallocate(qc)
     call deallocate(dqdtc)
 
-  end subroutine timestep_heun_Kflux_Src_nonstat
-  
-  subroutine timestep_LMT_1DS(q, dt, uv_fld)
-    type(field), intent(inout) :: q
-    type(uv_signed), intent(in) :: uv_fld
-
-    real(kind = dp), intent(in) :: dt
-    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
-
-    type(field) :: dqdt
-    
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-
-    allocate(F(q%m+1, q%n))
-    allocate(G(q%m, q%n+1))
-    allocate(dqx(q%m+1, q%n))
-    allocate(dqy(q%m, q%n+1))
-
-    ! F, G at boundaries will not be touched
-    F = 0.0_dp
-    G = 0.0_dp
-
-    ! Strang splitting: x, y direction - XYX
-    ! X
-    call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
-    call dx_field(dqx, q)
-    call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, 0.5_dp*dt)  ! Apply limiter
-    
-    call eval_dqdt_F(dqdt, q, F)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-
-    ! Y
-    call assemble_G_DCU(G, q, uv_fld%vp, uv_fld%vm)
-    call dy_field(dqy, q)
-    call assemble_G_limiter(G, dqy, uv_fld%v_sgn, uv_fld%v_abs, dt)  ! Apply limiter
-
-    call eval_dqdt_G(dqdt, q, G)
-    call timestep_fe(q, dqdt, dt)
-    
-    ! X
-    call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
-    call dx_field(dqx, q)
-    call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, 0.5_dp*dt)  ! Apply limiter
-    
-    call eval_dqdt_F(dqdt, q, F)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-
-    ! Deallocate
-    call deallocate(dqdt)
-
-    deallocate(dqx)
-    deallocate(dqy)
-    deallocate(F)
-    deallocate(G)
-
-  end subroutine timestep_LMT_1DS
-  
-  subroutine timestep_LaxWendoff(q, dt, uv_fld)
-    type(field), intent(inout) :: q
-    type(uv_signed), intent(in) :: uv_fld
-
-    real(kind = dp), intent(in) :: dt
-    real(kind=dp), dimension(:,:), allocatable :: F, G
-
-    type(field) :: dqdt
-    
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-
-    allocate(F(q%m+1, q%n))
-    allocate(G(q%m, q%n+1))
-
-    ! F, G at boundaries will not be touched
-    F = 0.0_dp
-    G = 0.0_dp
-
-    ! Strang splitting: x, y direction - XYX
-    ! X
-    call assemble_F_LW(F, q, uv_fld, 0.5_dp*dt)  ! LaxWendoff
-    
-    call eval_dqdt_F(dqdt, q, F)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-
-    ! Y
-    call assemble_G_LW(G, q, uv_fld, dt)  ! LaxWendoff
-
-    call eval_dqdt_G(dqdt, q, G)
-    call timestep_fe(q, dqdt, dt)
-    
-    ! X
-    call assemble_F_LW(F, q, uv_fld, 0.5_dp*dt)  ! LaxWendoff
-    
-    call eval_dqdt_F(dqdt, q, F)
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-
-    ! Deallocate
-    call deallocate(dqdt)
-
-    deallocate(F)
-    deallocate(G)
-
-  end subroutine timestep_LaxWendoff
+  end subroutine timestep_heun_K_Src_nonstat
   
   subroutine timestep_LMT_2D(q, dt, uv_fld)
     type(field), intent(inout) :: q
@@ -952,24 +491,32 @@ contains
     G = 0.0_dp
     dqx = 0.0_dp
     dqy = 0.0_dp
+
+    call imposeBC(q)
     
+    ! DCU + 1D limiter
     call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
     call dx_field(dqx, q)
-    call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, 0.5_dp*dt)  ! Apply limiter
+    call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, dt)  ! Apply limiter
 
     call assemble_G_DCU(G, q, uv_fld%vp, uv_fld%vm)
     call dy_field(dqy, q)
-    call assemble_G_limiter(G, dqy, uv_fld%v_sgn, uv_fld%v_abs, 0.5_dp*dt)  ! Apply limiter
+    call assemble_G_limiter(G, dqy, uv_fld%v_sgn, uv_fld%v_abs, dt)  ! Apply limiter
+    
+    ! CTU ( for 2nd order )
+    call assemble_FG_CTU(F, G, dqx, dqy, uv_fld%up, uv_fld%um, uv_fld%vp, uv_fld%vm, dt)
 
+    call imposeBC(F, G)
+    
+    call zeros(dqdt)
     call eval_dqdt_FG(dqdt, q, F, G)
     call timestep_fe(q, dqdt, dt)
     call imposeBC(q)
 
     ! Deallocate
     call deallocate(dqdt)
-
-    deallocate(dqx)
     deallocate(dqy)
+    deallocate(dqx)
     deallocate(F)
     deallocate(G)
 
@@ -1017,13 +564,12 @@ contains
     
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)
-    call imposeBC(K_e)
     
     dt = T/nts
     do i = 1, nts
-      call timestep_heun_Kflux(q, dt, K_e)
+      call timestep_heun_K(q, 0.5_dp*dt, K_e)
       call timestep_LMT_2D(q, dt, uv_fld)
-!       call timestep_LMT_1DS(q, dt, uv_fld)
+      call timestep_heun_K(q, 0.5_dp*dt, K_e)
     end do
 
     call deallocate(uv_fld)
