@@ -60,7 +60,7 @@ contains
     !call unittest_IO()
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
-    !call unittest_solver_convergence()
+    call unittest_solver_convergence()
     call unittest_interpolation()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest

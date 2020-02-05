@@ -312,7 +312,7 @@ contains
     real(kind=dp), dimension(:,:), allocatable :: dqx_G_exact, dqy_F_exact
     real(kind=dp), dimension(:), allocatable :: h_arr, err_arr_F, err_arr_G
     
-    h_range = 10
+    h_range = 8
     allocate(err_arr_F(h_range))
     allocate(err_arr_G(h_range))
     allocate(h_arr(h_range))
@@ -801,10 +801,11 @@ contains
     character(len = 256) :: scr_lne, filename
     
     ! Test temporal accuarcy (periodic solution)
-    C = 8
+    C = 1
     
 #include "advdiff_configuration.h"
-    do split = 1, 2
+!     do split = 1, 2
+    do split = 2, 2
 #if MC0LW1 == 0
       write(filename, "(a,i0,a)") "./output/MC_split", split, ".txt"
 #elif MC0LW1 == 1
@@ -815,7 +816,8 @@ contains
       write(output_unit, "(a)") "% Timestepping to periodic state"
       write(output_unit, "(a)") "% Scale dt = 1/C dx"
       write(output_unit, "(a,i0,a)") "% nts =", C,"*m"
-      do i = 1, 8
+      !do i = 1, 8
+      do i = 1, 5
         m = 2 ** (i+3)
         nts = C* m
         write(scr_lne, "(a,i0,a,i6,a,i0,a,i6,a,i0,a,"//dp_chr//")") &
@@ -845,8 +847,8 @@ contains
     integer, parameter :: gl = 1
 
     real(kind=dp), parameter :: Pi = 4.0_dp* datan (1.0_dp)
-!     real(kind=dp), parameter :: T = 0.1_dp * 2.0_dp
-    real(kind=dp), parameter :: T = 1.0_dp
+    real(kind=dp), parameter :: T = 0.2_dp * 2.0_dp
+!     real(kind=dp), parameter :: T = 1.0_dp
    
     type(field) :: q_exact, q_err
     real(kind=dp) :: t_i, err_int, err_sup, dt

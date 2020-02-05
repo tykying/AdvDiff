@@ -11,7 +11,8 @@ module advdiff_field
     & dx_field, dy_field, manual_field, &
     & psi_to_uv, int_field, int_sq_field, &
     & eval_field, iszero, &
-    & dx_field_HoriEdge, dy_field_VertEdge
+    & dx_field_HoriEdge, dy_field_VertEdge, &
+    & dx_field_HoriEdge_BC, dy_field_VertEdge_BC
     
   public :: indicator_field
   public :: uv_signed, K_flux
@@ -42,6 +43,7 @@ module advdiff_field
 
   type K_flux
     real(kind = dp), dimension(:, :), pointer :: K11e, K21e, K12e, K22e
+    real(kind = dp), dimension(:, :), pointer :: K11c, K12c, K22c
   end type K_flux
 
   interface allocate
@@ -350,12 +352,20 @@ contains
     allocate(K_e%K12e(m+1, n))  ! Define at vertical edges
     allocate(K_e%K21e(m, n+1))  ! Define at horizonal edges
     allocate(K_e%K22e(m, n+1))  ! Define at horizonal edges
-
+    
+    allocate(K_e%K11c(m+1, n+1))  ! Define at corners
+    allocate(K_e%K22c(m+1, n+1))  ! Define at corners
+    allocate(K_e%K12c(m+1, n+1))  ! Define at corners
+    
     K11e => K_e%K11e
     K12e => K_e%K12e
     K21e => K_e%K21e
     K22e => K_e%K22e
 
+    K_e%K11c = K11%data
+    K_e%K22c = K22%data
+    K_e%K12c = K12%data
+    
     ! K: at corners
     ! For K11 and K12
     do j = 1, n
@@ -381,7 +391,11 @@ contains
     deallocate(K_e%K21e)
     deallocate(K_e%K12e)
     deallocate(K_e%K22e)
-
+    
+    deallocate(K_e%K11c)
+    deallocate(K_e%K22c)
+    deallocate(K_e%K12c)
+    
   end subroutine deallocate_Kflux
 
   subroutine zero_field(fld)
@@ -543,6 +557,7 @@ contains
       d_fld(i, fld%n+1) = 0.0_dp    ! Top
     end do
 
+    ! To be replaced: can delete
     do j = 2, fld%n
       d_fld(1, j) = -0.75_dp*(lfld(1+gl, j-1+gl)+lfld(1+gl, j+gl)) &
                     + (lfld(2+gl, j-1+gl)+lfld(2+gl, j+gl)) &
@@ -551,6 +566,7 @@ contains
                     - (lfld(fld%m-1+gl, j-1+gl)+lfld(fld%m-1+gl, j+gl)) &
                     + 0.25_dp*(lfld(fld%m-2+gl, j-1+gl)+lfld(fld%m-2+gl, j+gl))  ! Right
     end do
+    ! End: can delete 
 
     do j = 2, fld%n
       do i = 2, (fld%m-1)
@@ -571,6 +587,7 @@ contains
     lfld => fld%data
     gl = fld%glayer
     
+    ! To be replaced: can delete
     do i = 2, fld%m
       d_fld(i, 1) = -0.75_dp*(lfld(i-1+gl, 1+gl)+lfld(i+gl, 1+gl)) &
                     + (lfld(i-1+gl, 2+gl)+lfld(i+gl, 2+gl)) &
@@ -579,6 +596,7 @@ contains
                     - (lfld(i-1+gl, fld%n-1+gl)+lfld(i+gl, fld%n-1+gl)) &
                     + 0.25_dp*(lfld(i-1+gl, fld%n-2+gl)+lfld(i+gl, fld%n-2+gl))  ! Top
     end do
+    ! End: can delete 
 
     do j = 1, fld%n
       d_fld(1, j) = 0.0_dp          ! Left
@@ -593,6 +611,45 @@ contains
     end do
     
   end subroutine dy_field_VertEdge
+  
+  subroutine dx_field_HoriEdge_BC(dqx_G, dqx_F, dqy_G, K11, K12)
+    real(kind=dp), dimension(:,:), intent(inout) :: dqx_G
+    real(kind=dp), dimension(:,:), intent(in) :: dqx_F, dqy_G, K11, K12
+    integer :: j, m, n
+
+    m = size(dqy_G, 1)
+    n = size(dqx_F, 2)
+
+    do j = 2, n
+      dqx_G(1, j) = 0.5_dp*( &
+        - K12(1,j)/K11(1,j)*(1.5_dp*dqy_G(1,j) - 0.5_dp*dqy_G(2,j)) &
+        + 0.5_dp* dqx_F(2,j) + 0.5_dp* dqx_F(2,j-1) )  ! Left
+      dqx_G(m, j) = 0.5_dp*( &
+        - K12(m+1,j)/K11(m+1,j)*(1.5_dp*dqy_G(m,j) - 0.5_dp*dqy_G(m-1,j)) &
+        + 0.5_dp* dqx_F(m,j) + 0.5_dp* dqx_F(m,j-1) )  ! Right
+    end do
+
+  end subroutine dx_field_HoriEdge_BC
+  
+  subroutine dy_field_VertEdge_BC(dqy_F, dqx_F, dqy_G, K12, K22)
+    real(kind=dp), dimension(:,:), intent(inout) :: dqy_F
+    real(kind=dp), dimension(:,:), intent(in) :: dqx_F, dqy_G, K12, K22
+    
+    integer :: i, m, n
+    
+    m = size(dqy_G, 1)
+    n = size(dqx_F, 2)
+    
+    do i = 2, m
+      dqy_F(i, 1) = 0.5_dp*( &
+        - K12(i,1)/K22(i,1)*(1.5_dp*dqx_F(i,1) - 0.5_dp*dqx_F(i,2)) &
+        + 0.5_dp* dqy_G(i,2) + 0.5_dp* dqy_G(i-1,2) )  ! Left
+      dqy_F(i, n) = 0.5_dp*( &
+        - K12(i,n+1)/K22(i,n+1)*(1.5_dp*dqx_F(i,n) - 0.5_dp*dqx_F(i,n-1)) &
+        + 0.5_dp* dqy_G(i,n) + 0.5_dp* dqy_G(i-1,n) )  ! Right
+    end do
+    
+  end subroutine dy_field_VertEdge_BC
   
   
   subroutine manual_field(fld, param)

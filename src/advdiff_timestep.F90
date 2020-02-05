@@ -243,42 +243,43 @@ contains
 
   end subroutine imposeBC_q
   
-  subroutine eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e)
+  subroutine eval_dqdt_K(dqdt, q, K_e)
     type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
+    type(K_flux), intent(in) :: K_e
 
-    real(kind=dp), dimension(:,:) :: K11e, K12e, K21e, K22e
     real(kind=dp), dimension(:,:), allocatable :: F, G, dqx_F, dqy_F, dqx_G, dqy_G
     
     allocate(F(q%m+1, q%n))
     allocate(G(q%m, q%n+1))
     
-    ! Evaluate F
+    ! Evaluate F, G
     allocate(dqx_F(q%m+1, q%n))
     allocate(dqy_F(q%m+1, q%n))
-    
-    call dx_field(dqx_F, q)
-    call dy_field_VertEdge(dqy_F, q)
-    F = -(K11e * dqx_F + K12e * dqy_F)
-    
-    deallocate(dqy_F)
-    deallocate(dqx_F)
-
-    ! Evaluate G
     allocate(dqx_G(q%m, q%n+1))
     allocate(dqy_G(q%m, q%n+1))
     
+    call dx_field(dqx_F, q)
+    call dy_field_VertEdge(dqy_F, q)
+    
     call dx_field_HoriEdge(dqx_G, q)
     call dy_field(dqy_G, q)
-    G = -(K21e * dqx_G + K22e * dqy_G)
     
-    deallocate(dqy_G)
-    deallocate(dqx_G)
+    ! Impose BC
+    call dx_field_HoriEdge_BC(dqx_G, dqx_F, dqy_G, K_e%K11c, K_e%K12c)
+    call dy_field_VertEdge_BC(dqy_F, dqx_F, dqy_G, K_e%K12c, K_e%K22c)
+    
+    F = -(K_e%K11e * dqx_F + K_e%K12e * dqy_F)
+    G = -(K_e%K21e * dqx_G + K_e%K22e * dqy_G)
     
     ! Evaluate dqdt
     call imposeBC(F, G)
     call eval_dqdt_FG(dqdt, q, F, G)
-    
+
+    deallocate(dqy_G)
+    deallocate(dqx_G)
+    deallocate(dqy_F)
+    deallocate(dqx_F)
     deallocate(G)
     deallocate(F)
     
@@ -313,8 +314,7 @@ contains
   
   ! Consider the ghost point
   subroutine eval_dqdt_scr_nonstat(dqdt, q, t)
-    ! Assumed zero flux BC
-    type(field), intent(out) :: dqdt
+    type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
     real(kind = dp), intent(in) :: t
 
@@ -332,7 +332,7 @@ contains
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)
         y = fld_x(j, q%n, q%type_id)
-        ldqdt(i+gl,j+gl) = S_rhs_nonstat(x, y, t)
+        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) + S_rhs_nonstat(x, y, t)
       end do
     end do
     
@@ -368,22 +368,15 @@ contains
 
     real(kind = dp), intent(in) :: dt
 
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
     type(field) :: dqdt
     type(field) :: qc
 
     call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
     call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
 
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
     ! Evaluate dqdt and copy q to qc
     call zeros(dqdt)
-    call eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K(dqdt, q, K_e)
     call set(qc, q)
 
     ! Prediction step
@@ -391,7 +384,7 @@ contains
     call imposeBC(qc)
 
     ! Correction step (add to dqdt)
-    call eval_dqdt_K(dqdt, qc, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K(dqdt, qc, K_e)
     
     ! Full timestepping
     call timestep_fe(q, dqdt, 0.5_dp*dt)
@@ -402,25 +395,16 @@ contains
 
   end subroutine timestep_heun_K
   
-  subroutine eval_dqdt_K_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
-    type(field), intent(inout) :: dqdt, q
-    real(kind = dp), dimension(:,:), intent(in) :: K11e, K12e, K21e, K22e
+  subroutine eval_dqdt_K_scr_nonstat(dqdt, q, t, K_e)
+    type(field), intent(inout) :: dqdt
+    type(field), intent(in) :: q
+    type(K_flux), intent(in) :: K_e
 
     real(kind = dp), intent(in) :: t
 
-    type(field) :: dqdt_S
-    
-    call allocate(dqdt_S, q%m, q%n, 'dqdt_S', glayer=q%glayer, type_id=q%type_id)
-
     call zeros(dqdt)
-    call eval_dqdt_K(dqdt, q, K11e, K12e, K21e, K22e) ! From diffusion
-
-    call zeros(dqdt_S)
-    call eval_dqdt_scr_nonstat(dqdt_S, q, t) ! From source term
-
-    call addto(dqdt, dqdt_S, 1.0_dp)
-    
-    call deallocate(dqdt_S)
+    call eval_dqdt_K(dqdt, q, K_e) ! From diffusion
+    call eval_dqdt_scr_nonstat(dqdt, q, t) ! From source term
     
   end subroutine eval_dqdt_K_scr_nonstat
   
@@ -431,8 +415,6 @@ contains
 
     real(kind = dp), intent(in) :: dt, t
 
-    real(kind = dp), dimension(:,:), pointer :: K11e, K12e, K21e, K22e
-
     type(field) :: dqdt
     type(field) :: qc
     type(field) :: dqdtc
@@ -441,15 +423,10 @@ contains
     call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
     call allocate(dqdtc, q%m, q%n, 'dqdtc', glayer=q%glayer, type_id=q%type_id)
 
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
-
     ! Evaluate dqdt and copy q to qc
     call set(qc, q)
     call zeros(dqdt)
-    call eval_dqdt_K_scr_nonstat(dqdt, q, t, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K_scr_nonstat(dqdt, q, t, K_e)
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
@@ -457,7 +434,7 @@ contains
 
     ! Correction step
     call zeros(dqdtc)
-    call eval_dqdt_K_scr_nonstat(dqdtc, qc, t+dt, K11e, K12e, K21e, K22e)
+    call eval_dqdt_K_scr_nonstat(dqdtc, qc, t+dt, K_e)
     call addto(dqdt, dqdtc, 1.0_dp)
 
     ! Full timestepping
