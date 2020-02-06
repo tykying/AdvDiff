@@ -197,7 +197,7 @@ contains
     m = 64
     n = m
     call allocate(mesh, m, n)
-    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+    call allocate(q, mesh%m, mesh%n, 'q', type_id=2)
 
     ! Assign particle
     m_part = 16
@@ -282,30 +282,26 @@ contains
   
   subroutine assign_q_traj(q)
     type(field), intent(inout) :: q
-    integer :: i, j, gl
+    integer :: i, j
     real(kind=dp) :: x, y
     
-    gl = q%glayer
-
     do j = 1, q%n
       do i = 1, q%m
         x = (real(i, kind=dp)-0.5_dp)/real(q%m, kind=dp)
         y = (real(j, kind=dp)-0.5_dp)/real(q%n, kind=dp)
         
-        q%data(i+gl, j+gl) = testcase_traj(x, y)
+        q%data(i, j) = testcase_traj(x, y)
       end do
     end do
-    
-    call imposeBC(q)
     
   end subroutine assign_q_traj
 
   subroutine unittest_operator_order()
     type(field) :: q, dqdt
-    integer :: m, n, glayer, type_id
+    integer :: m, n, type_id
     
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-    integer :: i, j, gl, h, h_range
+    integer :: i, j, h, h_range
     real(kind = dp) :: x, y, p_F, p_G
     
     real(kind=dp), dimension(:,:), allocatable :: dqx_F, dqy_F, dqx_G, dqy_G
@@ -322,10 +318,9 @@ contains
     n = m
     h_arr(h) = 1.0_dp/real(m, kind=dp)
     
-    glayer = 1
     type_id = 2  ! Defined at cell centre; =1: defined at corners
-    call allocate(q, m, n, 'q', glayer=glayer, type_id=type_id)
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+    call allocate(q, m, n, 'q', type_id=type_id)
+    call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
     
     allocate(dqx_F(q%m+1, q%n))
     allocate(dqy_F(q%m+1, q%n))
@@ -333,20 +328,16 @@ contains
     allocate(dqy_G(q%m, q%n+1))
     allocate(dqx_G_exact(q%m, q%n+1))
     allocate(dqy_F_exact(q%m+1, q%n))
-
-    gl = q%glayer
       
     !call zeros(q)
     do j = 1, q%n
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)
         y = fld_x(j, q%n, q%type_id)
-        q%data(i+gl, j+gl) = dcos(0.5_dp*Pi*x) * dcos(Pi*y)
+        q%data(i, j) = dcos(0.5_dp*Pi*x) * dcos(Pi*y)
       end do
     end do
-    
-    call imposeBC(q)
-    
+        
     dqx_F = 999.0_dp
     dqy_F = 999.0_dp
     dqx_G = 999.0_dp
@@ -361,28 +352,22 @@ contains
     ! Compare with exact solution
     do j = 1, size(dqx_G, 2)
       do i = 1, size(dqx_G, 1)
-        x = fld_x(i, q%m, 2)  ! typeid=2: Centre
-        y = fld_x(j, q%n, 1)  ! typeid=1: Corner
+        x = fld_x(i, q%m, type_id=2)  ! type_id=2: Centre
+        y = fld_x(j, q%n, type_id=1)  ! type_id=1: Corner
         dqx_G_exact(i, j) = -0.5_dp*Pi*dsin(0.5_dp*Pi*x) * dcos(Pi*y)
       end do
     end do
     
     do j = 1, size(dqy_F, 2)
       do i = 1, size(dqy_F, 1)
-        x = fld_x(i, q%m, 1)  ! typeid=1: Corner
-        y = fld_x(j, q%n, 2)  ! typeid=2: Centre
+        x = fld_x(i, q%m, type_id=1)  ! type_id=1: Corner
+        y = fld_x(j, q%n, type_id=2)  ! type_id=2: Centre
         dqy_F_exact(i, j) = -Pi*dcos(0.5_dp*Pi*x) * dsin(Pi*y)
       end do
     end do
     
     dqx_G = dqx_G*real(m, kind=dp)
-    dqy_F = dqy_F*real(m, kind=dp)
-    
-    ! Boundary: set value equal to exact one
-    dqx_G(:, 1) = dqx_G_exact(:, 1)
-    dqx_G(:, size(dqx_G,2)) = dqx_G_exact(:, size(dqx_G,2))
-    dqy_F(1, :) = dqy_F_exact(1, :)
-    dqy_F(size(dqy_F,1), :) = dqy_F_exact(size(dqy_F,1), :)
+    dqy_F = dqy_F*real(n, kind=dp)
     
     err_arr_G(h) = max_diff(dqx_G, dqx_G_exact)
     err_arr_F(h) = max_diff(dqy_F, dqy_F_exact)
@@ -457,69 +442,24 @@ contains
     integer :: m, n
     integer :: i, j
 
-    type(uv_signed) :: uv_fld
-    type(K_flux) :: K_e
-
-    integer, parameter :: gl = 1
-
-    real(kind=dp) :: t = 1.0_dp*3.1415926_dp
+    real(kind=dp) :: t
     real(kind=dp) :: dt
     integer :: nts
-    integer :: ind = 0
 
     type(field) :: q0
     real(kind=dp) :: q_int_0, x, y
-    real(kind=dp), dimension(:,:), allocatable :: dqx, dqy
     real(kind=dp), parameter :: eps = 1D-14
     
     real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    m = 4
-    n = m
-    
-    ! Test calculation of gradient q
-    call allocate(q, m, n, 'q', glayer=1, type_id=2)
-    allocate(dqx(q%m+1, q%n))
-    allocate(dqy(q%m, q%n+1))
-
-    do i = 1, m
-      do j = 1, n
-        q%data(i+gl, j+gl) = i*(2*j+1)
-      end do
-    end do
-    
-    call imposeBC(q)
-    call dx_field(dqx, q)
-    call dy_field(dqy, q)
-    
-    do j = 1, size(dqx, 2)
-      do i = 2, size(dqx, 1)-1
-        if (abs(dqx(i,j) - (2.0_dp*j+1.0_dp)) > 1e-13) then
-          call abort_handle("Error in dqx!", __FILE__, __LINE__)
-        end if
-      end do
-    end do
-    
-    do j = 2, size(dqy, 2)-1
-      do i = 1, size(dqy, 1)
-        if (abs(dqy(i,j) - 2*i) > 1e-13) then
-          call abort_handle("Error in dqy!", __FILE__, __LINE__)
-        end if
-      end do
-    end do
-    
-    call deallocate(q)
-    deallocate(dqx)
-    deallocate(dqy)
     
     m = 64+1
     n = 64+1
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(q0, m, n, 'q0', glayer=gl, type_id=2)
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=1)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=1)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=1)
+    call allocate(q, m, n, 'q', type_id=2)
+    call allocate(q0, m, n, 'q0', type_id=2)
+    call allocate(psi, m, n, 'psi', type_id=1)
+    call allocate(K11, m, n, 'K11', type_id=1)
+    call allocate(K22, m, n, 'K22', type_id=1)
+    call allocate(K12, m, n, 'K12', type_id=1)
 
     ! Ridge body rotation for psi
     do j = 1, size(psi%data,2)
@@ -529,60 +469,30 @@ contains
         psi%data(i, j) = psi%m*psi%n/(Pi**2) *dsin(Pi*x)*dsin(Pi*y)
       end do
     end do
-    
-!     call print_array(psi%data, "psi")
-
     call set(K11, 0.1_dp)
     call set(K22, 0.1_dp)
     call set(K12, 0.0_dp)
     
-    ! Convert data structure
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-
-    !dt_UB = 1.0_dp/maxmax(uv_fld%u_abs, uv_fld%v_abs)
-    !nts = ceil(t/(1/dt_UB))
-    nts = floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
-    dt = t/nts
-
     ! Reset q
     call zeros(q)
     do i = -2, 2
       do j = -2, 2
-        !call indicator_field(q, q%m/2+i+q%m/8+2, q%n/2+j)
         call indicator_field(q, (q%m+1)/2+i, (q%n+1)/2+j)
       end do
     end do
-
     call set(q0, q)
-!     call print_array(q0%data, "q0")
-
     q_int_0 = int_field(q)
-
-    call write(q, "./unittest/solverprop/q", 0.0_dp, 0)
-    call write(psi, "./unittest/solverprop/psi", 0.0_dp, 0)
-    ind = ind + 1
-
-    call print_info(psi, dt)
-
+    
+    t = 1.0_dp * Pi
+    nts = 1000
+    call print_info(psi, t/nts)
+    
     if (rotsym(q) .ge. eps) then
       call abort_handle(" ! FAIL @ Rotational symmetry at initialisation", __FILE__, __LINE__)
     end if
-
-!     call print_array(psi%data, "psi")
-    do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
-      call timestep_LMT_2D(q, dt, uv_fld)
-
-      if (mod(i, floor(nts/25.0_dp)) .eq. 0) then
-        call write(q, "./unittest/solverprop/q", dt*i, ind)
-        ind = ind + 1
-      end if
-    end do
-
-    call print_info(q)
-!     call print_array(q%data, "q")
-
+    
+    call advdiff_q(q, psi, K11, K22, K12, t, nts)
+    
     ! Test rotational symmetry
     if (rotsym(q) .le. eps) then
       write(6, *) " -- P: Rotational symmetry preserved --"
@@ -593,7 +503,7 @@ contains
     end if
 
     ! Test mass conservation
-    if (diff_int(q, q0) .le. 10.0_dp*eps) then
+    if (diff_int(q, q0)/q_int_0 .le. 10.0_dp*eps) then
       write(6, *) " -- P: Total mass conserved --"
     else
       write(6, "(a,"//dp_chr//")") "Difference in mass = ", diff_int(q, q0)
@@ -606,20 +516,17 @@ contains
     call deallocate(K11)
     call deallocate(K22)
     call deallocate(K12)
-
-    call deallocate(uv_fld)
-    call deallocate(K_e)
     
     ! Test Divergence consistent: constant initial condition
-    m = 8+1
-    n = 8+1
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(q0, m, n, 'q0', glayer=gl, type_id=2)
+    m = 64
+    n = 64
+    call allocate(q, m, n, 'q', type_id=2)
+    call allocate(q0, m, n, 'q0', type_id=2)
     
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=1)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=1)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=1)
+    call allocate(psi, m, n, 'psi', type_id=1)
+    call allocate(K11, m, n, 'K11', type_id=1)
+    call allocate(K22, m, n, 'K22', type_id=1)
+    call allocate(K12, m, n, 'K12', type_id=1)
 
     call set(q, 1.0_dp)
     call set(q0, q)
@@ -644,13 +551,7 @@ contains
       end do
     end do
 
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-
-    do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
-      call timestep_LMT_2D(q, dt, uv_fld)
-    end do
+    call advdiff_q(q, psi, K11, K22, K12, t, nts)
 
     call addto(q0, q, -1.0_dp)
 
@@ -667,30 +568,26 @@ contains
     call deallocate(K11)
     call deallocate(K22)
     call deallocate(K12)
-
-    call deallocate(uv_fld)
-    call deallocate(K_e)
     
     ! Test positivity
-    m = 64
-    n = 64
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(q0, m, n, 'q0', glayer=gl, type_id=2)
+    m = 16
+    n = 16
+    call allocate(q, m, n, 'q', type_id=2)
+    call allocate(q0, m, n, 'q0', type_id=2)
     
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=1)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=1)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=1)
+    call allocate(psi, m, n, 'psi', type_id=1)
+    call allocate(K11, m, n, 'K11', type_id=1)
+    call allocate(K22, m, n, 'K22', type_id=1)
+    call allocate(K12, m, n, 'K12', type_id=1)
 
     ! Initialise q
     do j = 1, q%n
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)  ! in [0, 1]
         y = fld_x(j, q%n, q%type_id)  ! in [0, 1]
-        q%data(i+q%glayer, j+q%glayer) = dexp(-(((x-0.3_dp)/0.05_dp)**2 + ((y-0.5_dp)/0.15_dp)**2))
+        q%data(i, j) = dexp(-(((x-0.3_dp)/0.05_dp)**2 + ((y-0.5_dp)/0.15_dp)**2))
       end do
     end do
-    call imposeBC(q)
 !     call print_array(q%data, "q0")
     
     ! Initialise psi
@@ -713,21 +610,16 @@ contains
       end do
     end do
     
-    call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
-    
     call set(q0, q)
     t = 10.0_dp*Pi
-    nts = 10*floor(10.0_dp*floor(t*max(maxval(uv_fld%u_abs), maxval(uv_fld%v_abs))))+1
+    nts = 1000
     dt = t/nts
     
     call print_info(psi, dt)
-!     call print_array(q%data, 'q0')
     
     do i = 1, nts
-      call timestep_heun_K(q, dt, K_e)
-      call timestep_LMT_2D(q, dt, uv_fld)
-
+      call advdiff_q(q, psi, K11, K22, K12, dt, 1)
+      
       ! Check at every step
       if (dabs(neg_int(q)) .ge. eps) then
         write(6, *) i, "-th step"
@@ -749,8 +641,6 @@ contains
     call deallocate(K22)
     call deallocate(K12)
 
-    call deallocate(uv_fld)
-    call deallocate(K_e)
     
     write(6, "(a)") &
       "! ----------- Passed unittest_solver_properties ----------- !"
@@ -758,12 +648,11 @@ contains
   
   pure real(kind=dp) function rotsym(fld)
     type(field), intent(in) :: fld
-    integer :: m, n, i, j, gl
+    integer :: m, n, i, j
     real(kind=dp) :: max_err, err
 
     m = fld%m
     n = fld%n
-    gl = fld%glayer
 
     max_err = 0.0_dp
 
@@ -774,17 +663,17 @@ contains
       do j = 1, n
         do i = 1, m
           ! Rotate by pi: x->-x; y->-y
-          err = dabs(fld%data(i+gl, j+gl)-fld%data(m-i+1+gl, n-j+1+gl))
+          err = dabs(fld%data(i, j)-fld%data(m-i+1, n-j+1))
           if (err .gt. max_err) then
             max_err = err
           end if
           ! Rotate by 3pi/2: x->y;  y->-x
-          err = dabs(fld%data(i+gl, j+gl)-fld%data(j+gl, m-i+1+gl))
+          err = dabs(fld%data(i, j)-fld%data(j, m-i+1))
           if (err .gt. max_err) then
             max_err = err
           end if
           ! Rotate by pi/2: x->-y;  y->x
-          err = dabs(fld%data(i+gl, j+gl)-fld%data(n-j+1+gl, i+gl))
+          err = dabs(fld%data(i, j)-fld%data(n-j+1, i))
           if (err .gt. max_err) then
             max_err = err
           end if
@@ -844,8 +733,6 @@ contains
     type(uv_signed) :: uv_fld
     type(K_flux) :: K_e
 
-    integer, parameter :: gl = 1
-
     real(kind=dp), parameter :: Pi = 4.0_dp* datan (1.0_dp)
     real(kind=dp), parameter :: T = 0.2_dp * 2.0_dp
 !     real(kind=dp), parameter :: T = 1.0_dp
@@ -854,14 +741,14 @@ contains
     real(kind=dp) :: t_i, err_int, err_sup, dt
     
     n = m
-    call allocate(q, m, n, 'q', glayer=gl, type_id=2)
-    call allocate(q_exact, m, n, 'q_exact', glayer=gl, type_id=2)
-    call allocate(q_err, m, n, 'q_err', glayer=gl, type_id=2)
-    call allocate(psi, m, n, 'psi', glayer=0, type_id=1)
+    call allocate(q, m, n, 'q', type_id=2)
+    call allocate(q_exact, m, n, 'q_exact', type_id=2)
+    call allocate(q_err, m, n, 'q_err', type_id=2)
+    call allocate(psi, m, n, 'psi', type_id=1)
 
-    call allocate(K11, m, n, 'K11', glayer=0, type_id=1)
-    call allocate(K22, m, n, 'K22', glayer=0, type_id=1)
-    call allocate(K12, m, n, 'K12', glayer=0, type_id=1)
+    call allocate(K11, m, n, 'K11', type_id=1)
+    call allocate(K22, m, n, 'K22', type_id=1)
+    call allocate(K12, m, n, 'K12', type_id=1)
 
     ! test_id = 1: q(t) 1-periodic
     call testcase_fields(psi, K11, K22, K12, q_exact)
@@ -871,7 +758,6 @@ contains
     
     ! Set inital condition to zero
     call assign_q_periodic(q, 0.0_dp)
-    call imposeBC(q)
     
     err_sup = 0.0_dp
     
@@ -885,7 +771,6 @@ contains
       call set(q_err, q)
       ! Compare q with exact stat state
       call assign_q_periodic(q_exact, t_i+dt)
-      call imposeBC(q_exact)
       call addto(q_err, q_exact, -1.0_dp)
       err_int = dsqrt(int_sq_field(q_err)/(m * n))
       
@@ -1116,7 +1001,7 @@ contains
     
     INDk = m_Ind*m_Ind/2+2
     call INDk_to_klist(klist, INDk, IndFn, mesh)
-    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+    call allocate(q, mesh%m, mesh%n, 'q', type_id=2)
     
     !! dt = 3 hours
     dt_rf = 1
@@ -1211,11 +1096,11 @@ contains
     integer :: i, j, type_id
     real(kind=dp) :: x, y
     
+    type_id = 1  ! Corner
     m = 4
-    n = 4
-    Mx = 4
-    My = 4
-    type_id = 1   ! Defined at corners
+    n = 8
+    Mx = 3
+    My = 5
     
     allocate(in(m+1, n+1))
     allocate(out(m*Mx+1, n*My+1))
@@ -1232,7 +1117,7 @@ contains
     
     ! Perform interpolation
     call bilinear_intpl(out, in, Mx, My)
-    
+
     ! Evaluate exact field
     do j = 1, size(exact, 2)
       do i = 1, size(exact, 1)
@@ -1248,7 +1133,7 @@ contains
     
     deallocate(exact)
     deallocate(out)
-    deallocate(in)
+    deallocate(in)    
     
     write(6, "(a)") &
       "! ----------- Passed unittest_interpolation ----------- !"

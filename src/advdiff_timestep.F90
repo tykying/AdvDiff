@@ -18,7 +18,7 @@ module advdiff_timestep
   public :: timestep_LMT_2D
 
   interface imposeBC
-    module procedure imposeBC_q, imposeBC_FG
+    module procedure imposeBC_FG
   end interface imposeBC
 
   interface print_info
@@ -39,18 +39,24 @@ contains
     type(field), intent(in) :: q
     real(kind = dp), dimension(:, :), pointer, intent(in) :: lup, lum
 
-    integer :: i, j, gl
+    integer :: i, j
     real(kind = dp), dimension(:, :), pointer :: lq
 
     lq => q%data
-    gl = q%glayer
 
+    ! Interior
     do j = 1, size(F, 2)
-      do i = 1, size(F, 1)
-        F(i,j) = lum(i,j)*lq(i+gl, j+gl) + lup(i,j)*lq(i+gl-1, j+gl)
+      do i = 2, (size(F, 1)-1)
+        F(i,j) = lum(i,j)*lq(i, j) + lup(i,j)*lq(i-1, j)
       end do
     end do
-
+    
+    ! Boundary
+    do j = 1, size(F, 2)
+      F(1,j) = 0.0_dp
+      F(size(F, 1), j) = 0.0_dp
+    end do
+    
   end subroutine assemble_F_DCU
   
   subroutine assemble_G_DCU(G, q, lvp, lvm)
@@ -58,16 +64,22 @@ contains
     type(field), intent(in) :: q
     real(kind = dp), dimension(:, :), pointer, intent(in) :: lvp, lvm
 
-    integer :: i, j, gl
+    integer :: i, j
     real(kind = dp), dimension(:, :), pointer :: lq
 
     lq => q%data
-    gl = q%glayer
 
-    do j = 1, size(G, 2)
+    ! Interior
+    do j = 2, (size(G, 2)-1)
       do i = 1, size(G, 1)
-        G(i,j) = lvm(i,j)*lq(i+gl, j+gl) + lvp(i,j)*lq(i+gl, j+gl-1)
+        G(i,j) = lvm(i,j)*lq(i, j) + lvp(i,j)*lq(i, j-1)
       end do
+    end do
+    
+    ! Boundary
+    do i = 1, size(G, 1)
+      G(i, 1) = 0.0_dp
+      G(i, size(G, 2)) = 0.0_dp
     end do
 
   end subroutine assemble_G_DCU
@@ -207,41 +219,15 @@ contains
     ! Set flux at domain boundaries to be zero
     do j = 1, size(F, 2)
       F(1,j) = 0.0_dp
-      F(size(F, 1),j) = 0.0_dp
+      F(size(F,1),j) = 0.0_dp
     end do
 
     do i = 1, size(G, 1)
       G(i,1) = 0.0_dp
-      G(i,size(G, 2)) = 0.0_dp
+      G(i,size(G,2)) = 0.0_dp
     end do
     
   end subroutine imposeBC_FG
-  
-  subroutine imposeBC_q(q)
-    type(field), intent(inout) :: q
-    integer :: i, j, gl, m, n
-
-    m = q%m
-    n = q%n
-
-    ! Set q in ghost layer to be the nearest value in the domain
-    ! Along y
-    do gl = 1, q%glayer  ! Inner to outer
-      do j = 1+q%glayer, n+q%glayer  ! Exclude horizontal ghost layers
-        q%data(1+q%glayer-gl,j) = q%data(1+q%glayer,j)
-        q%data(m+q%glayer+gl,j) = q%data(m+q%glayer,j)
-      end do
-    end do
-
-    ! Along x
-    do gl = 1, q%glayer
-      do i = 1, m+2*q%glayer    ! Now include the missing horizontal ghost layers
-        q%data(i,1+q%glayer-gl) = q%data(i,1+q%glayer)
-        q%data(i,n+q%glayer+gl) = q%data(i,n+q%glayer)
-      end do
-    end do
-
-  end subroutine imposeBC_q
   
   subroutine eval_dqdt_K(dqdt, q, K_e)
     type(field), intent(inout) :: dqdt
@@ -295,20 +281,15 @@ contains
     integer :: i, j
     real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
 
-    integer :: gl   ! ghost layer
 
     lq => q%data
     ldqdt => dqdt%data
-    gl = q%glayer
 
     do j = 1, q%n
       do i = 1, q%m
-        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
+        ldqdt(i,j) = ldqdt(i,j) -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
       end do
     end do
-    
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
     
   end subroutine eval_dqdt_FG
   
@@ -321,23 +302,18 @@ contains
     integer :: i, j
     real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
     
-    integer :: gl   ! ghost layer
     real(kind = dp) :: x, y
 
     lq => q%data
     ldqdt => dqdt%data
-    gl = q%glayer
     
     do j = 1, q%n
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)
         y = fld_x(j, q%n, q%type_id)
-        ldqdt(i+gl,j+gl) = ldqdt(i+gl,j+gl) + S_rhs_nonstat(x, y, t)
+        ldqdt(i,j) = ldqdt(i,j) + S_rhs_nonstat(x, y, t)
       end do
     end do
-    
-    ! Ensure no floating point issues
-    call imposeBC(dqdt)
 
   end subroutine eval_dqdt_scr_nonstat
 
@@ -371,8 +347,8 @@ contains
     type(field) :: dqdt
     type(field) :: qc
 
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-    call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
+    call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
+    call allocate(qc, q%m, q%n, 'qc', type_id=q%type_id)
 
     ! Evaluate dqdt and copy q to qc
     call zeros(dqdt)
@@ -381,17 +357,15 @@ contains
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
-    call imposeBC(qc)
 
     ! Correction step (add to dqdt)
     call eval_dqdt_K(dqdt, qc, K_e)
     
     ! Full timestepping
     call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
 
-    call deallocate(dqdt)
     call deallocate(qc)
+    call deallocate(dqdt)
 
   end subroutine timestep_heun_K
   
@@ -402,7 +376,6 @@ contains
 
     real(kind = dp), intent(in) :: t
 
-    call zeros(dqdt)
     call eval_dqdt_K(dqdt, q, K_e) ! From diffusion
     call eval_dqdt_scr_nonstat(dqdt, q, t) ! From source term
     
@@ -417,11 +390,9 @@ contains
 
     type(field) :: dqdt
     type(field) :: qc
-    type(field) :: dqdtc
 
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
-    call allocate(qc, q%m, q%n, 'qc', glayer=q%glayer, type_id=q%type_id)
-    call allocate(dqdtc, q%m, q%n, 'dqdtc', glayer=q%glayer, type_id=q%type_id)
+    call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
+    call allocate(qc, q%m, q%n, 'qc', type_id=q%type_id)
 
     ! Evaluate dqdt and copy q to qc
     call set(qc, q)
@@ -430,20 +401,15 @@ contains
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
-    call imposeBC(qc)
 
     ! Correction step
-    call zeros(dqdtc)
-    call eval_dqdt_K_scr_nonstat(dqdtc, qc, t+dt, K_e)
-    call addto(dqdt, dqdtc, 1.0_dp)
+    call eval_dqdt_K_scr_nonstat(dqdt, qc, t+dt, K_e)
 
     ! Full timestepping
     call timestep_fe(q, dqdt, 0.5_dp*dt)
-    call imposeBC(q)
     
-    call deallocate(dqdt)
     call deallocate(qc)
-    call deallocate(dqdtc)
+    call deallocate(dqdt)
 
   end subroutine timestep_heun_K_Src_nonstat
   
@@ -456,7 +422,7 @@ contains
 
     type(field) :: dqdt
     
-    call allocate(dqdt, q%m, q%n, 'dqdt', glayer=q%glayer, type_id=q%type_id)
+    call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
 
     allocate(F(q%m+1, q%n))
     allocate(G(q%m, q%n+1))
@@ -468,8 +434,6 @@ contains
     G = 0.0_dp
     dqx = 0.0_dp
     dqy = 0.0_dp
-
-    call imposeBC(q)
     
     ! DCU + 1D limiter
     call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
@@ -488,7 +452,6 @@ contains
     call zeros(dqdt)
     call eval_dqdt_FG(dqdt, q, F, G)
     call timestep_fe(q, dqdt, dt)
-    call imposeBC(q)
 
     ! Deallocate
     call deallocate(dqdt)
@@ -536,8 +499,6 @@ contains
     type(uv_signed) :: uv_fld
     type(K_flux) :: K_e
     real(kind=dp) :: dt
-
-    call imposeBC(q)
     
     call allocate(uv_fld, psi)
     call allocate(K_e, K11, K22, K12)

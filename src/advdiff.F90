@@ -56,7 +56,7 @@ contains
     call unittest_operator_order()
     call unittest_comptools()
     call unittest_trajdata()
-    !call unittest_solver_properties()
+    call unittest_solver_properties()
     !call unittest_IO()
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
@@ -66,8 +66,8 @@ contains
   end subroutine unittest
 
   subroutine validation()
-    integer :: Td_i = 32
-    integer :: layer = 2
+    integer :: Td_i
+    integer, parameter :: layer = 2
     
     do Td_i = 1, 3
       call validate_inference(Td=Td_i*32, layer=layer)
@@ -107,8 +107,7 @@ contains
     integer, dimension(:), allocatable :: accept_counter
     real(kind=dp), dimension(:), allocatable :: canon_SSD
     
-    integer :: niter = 500
-    integer :: iter, canon_id, ind
+    integer :: niter, iter, canon_id, ind
     real(kind=dp) :: alphaUniRV
 
     character(len = 128) :: RunProfile
@@ -131,15 +130,14 @@ contains
     real(kind=dp), dimension(:), allocatable :: stdnRV, UniRV
     integer :: RV_ind, accepted
 
-    integer :: restart_ind = 0
-    integer :: output_dn = 100
+    integer :: restart_ind
+    integer :: output_dn
 
     ! MPI
     integer :: my_id, num_procs
 #if OMP0MPI1 == 1
     integer :: ierr !, PROVIDED, !! PROVIDED: For MPI-OpenMP
-    real(kind=dp) :: SlogPost_local
-    real(kind=dp) :: SlogPost_global = 0.0_dp
+    real(kind=dp) :: SlogPost_local, SlogPost_global
 #endif
 
     integer, dimension(4) :: SEED
@@ -609,7 +607,7 @@ contains
     ny = 6
     do j = 1, ny
       do i = 1, nx
-        call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+        call allocate(q, mesh%m, mesh%n, 'q', type_id=2)
         
         INDk = i + (j-1)*ny
         Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
@@ -693,7 +691,7 @@ contains
       
       do j = 1, ny
         do i = 1, nx
-          call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+          call allocate(q, mesh%m, mesh%n, 'q', type_id=2)
           
           INDk = i + (j-1)*ny
           Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)

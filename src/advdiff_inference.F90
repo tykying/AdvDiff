@@ -101,13 +101,13 @@ contains
 
     ! Defined at corners + DOF -> -1
     type_id = -1  ! NOT including the boundaries (assumed zeros, hence not DOF)
-    call allocate(dof%psi, m_psi, n_psi, 'psi', glayer=0, type_id=type_id)
+    call allocate(dof%psi, m_psi, n_psi, 'psi', type_id)
 
     ! Defined at cell centre + DOF -> -2
     type_id = -1  ! Including the boundaries
-    call allocate(dof%K11, m_K, n_K, 'K11', glayer=0, type_id=type_id)
-    call allocate(dof%K22, m_K, n_K, 'K22', glayer=0, type_id=type_id)
-    call allocate(dof%K12, m_K, n_K, 'K12', glayer=0, type_id=type_id)
+    call allocate(dof%K11, m_K, n_K, 'K11', type_id)
+    call allocate(dof%K22, m_K, n_K, 'K22', type_id)
+    call allocate(dof%K12, m_K, n_K, 'K12', type_id)
     
     ! By default zeros
     call zeros(dof%psi)
@@ -304,11 +304,10 @@ contains
     real(kind=dp), dimension(3), intent(in) :: Gauss_param    !=(mean_x, mean_y, sigma)
     type(meshdat), intent(in) :: mesh
 
-    integer :: i, j, gl
+    integer :: i, j
     real(kind=dp) :: x, y, x0, y0, Sigma0
     real(kind=dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
     real(kind=dp) :: tmp
-    gl = q%glayer
     
     x0 = Gauss_param(1)
     y0 = Gauss_param(2)
@@ -323,14 +322,12 @@ contains
                             /(2.0_dp*Pi*Sigma0**2)
         
         if (dabs(tmp) .gt. 1D-16) then
-          q%data(i+gl,j+gl) = tmp
+          q%data(i,j) = tmp
         else
-          q%data(i+gl,j+gl) = 0.0_dp
+          q%data(i,j) = 0.0_dp
         end if
       end do
     end do
-    
-    call imposeBC(q)
     
   end subroutine initialise_q_Gauss
   
@@ -353,7 +350,7 @@ contains
 
     ! Find out the cells corresponding to the indicator function
     call INDk_to_klist(klist, INDk, IndFn, mesh)
-    call allocate(q, mesh%m, mesh%n, 'q', glayer=1, type_id=2)
+    call allocate(q, mesh%m, mesh%n, 'q', type_id=2)
     
     ! Solve FK equation
     call initialise_q(q, klist, mesh)
@@ -381,11 +378,11 @@ contains
     type(meshdat), intent(in) :: mesh
     
    ! Defined at corners (! 1= corner; 2= centres; *-1 = DOF)
-    call allocate(dof_solver%psi, mesh%m, mesh%n, 'psi', glayer=0, type_id=1)
+    call allocate(dof_solver%psi, mesh%m, mesh%n, 'psi', type_id=1)
 
-    call allocate(dof_solver%K11, mesh%m, mesh%n, 'K11', glayer=0, type_id=1)
-    call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', glayer=0, type_id=1)
-    call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', glayer=0, type_id=1)
+    call allocate(dof_solver%K11, mesh%m, mesh%n, 'K11', type_id=1)
+    call allocate(dof_solver%K22, mesh%m, mesh%n, 'K22', type_id=1)
+    call allocate(dof_solver%K12, mesh%m, mesh%n, 'K12', type_id=1)
 
     ! Other data members: to be assigned when interpolated
     

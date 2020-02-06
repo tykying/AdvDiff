@@ -8,9 +8,9 @@ module advdiff_field
 
   public :: field, field_ptr, allocate, deallocate, zeros, &
     & scale, set, addto, addto_product, &
-    & dx_field, dy_field, manual_field, &
+    & dx_field, dy_field, &
     & psi_to_uv, int_field, int_sq_field, &
-    & eval_field, iszero, &
+    & iszero, &
     & dx_field_HoriEdge, dy_field_VertEdge, &
     & dx_field_HoriEdge_BC, dy_field_VertEdge_BC
     
@@ -18,7 +18,7 @@ module advdiff_field
   public :: uv_signed, K_flux
   public :: print_info, diff_int
   public :: testcase_fields, fld_x, assign_q_periodic, S_rhs_nonstat
-  public :: bilinear_intpl, pwc_intpl, sine_filter
+  public :: bilinear_intpl, pwc_intpl, sine_filter, linear_intpl
   public :: neg_int
   public :: dt_CFL
   
@@ -27,7 +27,6 @@ module advdiff_field
     integer :: m, n
     real(kind = dp), dimension(:, :), pointer :: data  ! It is an array, not a pointer
     character(len = field_name_len) :: name
-    integer :: glayer
     integer :: type_id
   end type field
 
@@ -79,44 +78,26 @@ module advdiff_field
   end interface print_info
 
 contains
-  subroutine allocate_field(fld, m, n, name, glayer, type_id)
+  subroutine allocate_field(fld, m, n, name, type_id)
     type(field), intent(out) :: fld
     integer, intent(in) :: m
     integer, intent(in) :: n
     character(len = *), intent(in) :: name
-    integer, optional, intent(in) :: glayer
-    integer, optional, intent(in) :: type_id
-
-    integer :: gl = 0
-    integer :: tid = 2  ! Default = 2: centre-based
-
-
-    if (present(glayer)) then
-      gl = glayer
-    end if
-
-    if (present(type_id)) then
-      tid = type_id
-    end if
-
+    integer, intent(in) :: type_id
+    
     fld%m = m
     fld%n = n
-    fld%glayer = gl
-    fld%type_id = tid
-
+    fld%type_id = type_id
+    
     if (fld%type_id .eq. 2) then
       ! Defined at cell centre
-      allocate(fld%data(fld%m+2*gl, fld%n+2*gl))
+      allocate(fld%data(m, n))
     elseif (fld%type_id .eq. 1) then
       ! Defined at corner
-      allocate(fld%data(fld%m+1+2*gl, fld%n+1+2*gl))
-    elseif (fld%type_id .lt. 0) then
-      ! DOF type: no ghost layer
-      if (gl .ne. 0) &
-        call abort_handle("Ghost layer for DOF should be zero", __FILE__, __LINE__)
-      allocate(fld%data(fld%m, fld%n))
-    elseif (fld%type_id .eq. 0) then
-       call abort_handle("fld%type_id = 0: should correct", __FILE__, __LINE__)
+      allocate(fld%data(m+1, n+1))
+    else
+      ! DOF type
+      allocate(fld%data(m, n))
     end if
 
     if(len_trim(name) > field_name_len) then
@@ -188,13 +169,33 @@ contains
 #endif
   end subroutine sine_filter
 
+  subroutine linear_intpl(out, in)
+    real(kind=dp), dimension(:), intent(out) :: out
+    real(kind=dp), dimension(:), intent(in) :: in
+    
+    integer :: i, n_in, n_out
+    real(kind=dp) :: x, alpha
+    
+    n_in = size(in, 1)
+    n_out = size(out, 1)
+    
+    out(1) = in(1)
+    out(n_out) = in(n_in)
+    
+    do i = 2, (n_out-1)
+      x = real((i-1)*(n_in-1), kind=dp)/real(n_out-1, kind=dp) + 1.0_dp
+      alpha = x - int(x)
+      out(i) = alpha * in(int(x)+1) + (1.0_dp - alpha) * in(int(x))
+    end do
+    
+  end subroutine linear_intpl
+  
   subroutine bilinear_intpl(out, in, Mx, My)
     real(kind=dp), dimension(:, :), intent(out) :: out
     real(kind=dp), dimension(:, :), intent(in) :: in
     integer, intent(in) :: Mx, My  ! Factor of scaling up
     
-    integer :: i, j, idiv, jdiv, imod, jmod
-    real(kind=dp) :: ialpha, jalpha
+    integer :: i, j, i_r, j_r
     
     if ((size(out,1)-1) .ne. (size(in,1)-1) * Mx) then
        write(6, *) "Mx = ", Mx
@@ -209,42 +210,30 @@ contains
     
     ! Bilinear interpolations: for K
     ! Assumed type_id = 1 (at corners)
-    do j = 1, size(out, 2)
-      do i = 1, size(out, 1)
-        idiv = (i-1)/Mx+1
-        jdiv = (j-1)/My+1
-        imod = mod(i-1, Mx)
-        jmod = mod(j-1, My)
-        ialpha = real(imod, kind=dp)/real(Mx, kind=dp)
-        jalpha = real(jmod, kind=dp)/real(My, kind=dp)
-
-        if ((imod .eq. 0) .and. (jmod .eq. 0)) then
-          ! Refined and coarse grid point
-          ! No interpolations
-          out(i,j) = in(idiv, jdiv)
-        elseif (imod .eq. 0) then
-          ! Grid point with x-coordinate aligned
-          ! 1D interpolation
-          out(i,j) = in(idiv, jdiv)*(1.0_dp-jalpha) &
-                          + in(idiv, jdiv+1)*jalpha
-        elseif (jmod .eq. 0) then
-          ! Grid point with y-coordinate aligned
-          ! 1D interpolation
-          out(i,j) = in(idiv, jdiv)*(1.0_dp-ialpha) &
-                          + in(idiv+1, jdiv)*ialpha
-        else
-          ! Bilinear interpolation
-          out(i,j) = in(idiv, jdiv)*(1.0_dp-ialpha)*(1.0_dp-jalpha) &
-                     + in(idiv+1, jdiv)*ialpha*(1.0_dp-jalpha) &
-                     + in(idiv, jdiv+1)*(1.0_dp-ialpha)*jalpha &
-                     + in(idiv+1, jdiv+1)*ialpha*jalpha
-        end if
-      end do
+    out = 0.0_dp
+    
+    ! Along x
+    do j = 1, size(in, 2)
+      j_r = (j-1)*My + 1
+      call linear_intpl(out(:, j_r), in(:, j))
+    end do
+    
+    ! Along y
+    do i = 1, size(in, 1)
+      i_r = (i-1)*Mx + 1
+      call linear_intpl(out(i_r, :), in(i, :))
+    end do
+    
+    ! Along y; fill in intermediate space
+    do i = 1, size(out, 1)
+      ! stride = My
+      call linear_intpl(out(i, :), out(i, 1:size(out,2):My))
     end do
 
   end subroutine bilinear_intpl
   
   subroutine pwc_intpl(rfld, fld)
+    ! Assumed type_id = 2 (at centres)
     real(kind=dp), dimension(:,:), intent(inout) :: rfld
     real(kind=dp), dimension(:,:), intent(in) :: fld
     
@@ -291,29 +280,29 @@ contains
     ! maxmin u and v wrt 0
     do j = 1, size(uv_fld%up, 2)
       do i = 1, size(uv_fld%up, 1)
-        if (dabs(uv_fld%up(i,j)) > 1D-14) then
+        if (dabs(uv_fld%up(i,j)) .gt. 1D-14) then
           uv_fld%u_sgn(i,j) = int(sign(1.0_dp, uv_fld%up(i,j)))
         else
           uv_fld%u_sgn(i,j) = 0
         end if
 
+        uv_fld%u_abs(i,j) = dabs(uv_fld%up(i,j))
         uv_fld%um(i,j) = min(uv_fld%up(i, j), 0.0_dp)
         uv_fld%up(i,j) = max(uv_fld%up(i, j), 0.0_dp)
-        uv_fld%u_abs(i,j) = uv_fld%up(i,j) - uv_fld%um(i,j)
       end do
     end do
 
     do j = 1, size(uv_fld%vp, 2)
       do i = 1, size(uv_fld%vp, 1)
-        if (dabs(uv_fld%vp(i,j)) > 1D-14) then
+        if (dabs(uv_fld%vp(i,j)) .gt. 1D-14) then
           uv_fld%v_sgn(i,j) = int(sign(1.0_dp, uv_fld%vp(i,j)))
         else
           uv_fld%v_sgn(i,j) = 0
         end if
-
+  
+        uv_fld%v_abs(i,j) = dabs(uv_fld%vp(i,j))
         uv_fld%vm(i,j) = min(uv_fld%vp(i, j), 0.0_dp)
         uv_fld%vp(i,j) = max(uv_fld%vp(i, j), 0.0_dp)
-        uv_fld%v_abs(i,j) = uv_fld%vp(i,j) - uv_fld%vm(i,j)
       end do
     end do
 
@@ -485,20 +474,12 @@ contains
     do j = 1, psi_fld%n
       do i = 1, psi_fld%m+1
         u(i, j) = psi_fld%data(i, j) - psi_fld%data(i, j+1)
-        
-        if (dabs(u(i, j)) < 1D-14) then
-          u(i, j) = 0.0_dp
-        end if
       end do
     end do
 
     do j = 1, psi_fld%n+1
       do i = 1, psi_fld%m
         v(i, j) = psi_fld%data(i+1, j) - psi_fld%data(i, j)
-        
-        if (dabs(v(i, j)) < 1D-14) then
-          v(i, j) = 0.0_dp
-        end if
       end do
     end do
 
@@ -507,18 +488,27 @@ contains
   subroutine dx_field(d_fld, fld)
     real(kind=dp), dimension(:,:), intent(out) :: d_fld
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
     real(kind = dp), dimension(:, :), pointer :: lfld
 
-    ! Exclude ghost cell in dx_field and dy_field
+    if (fld%type_id .ne. 2) &
+      call abort_handle("dx_field: fld is not at centres", __FILE__, __LINE__)
+      
     lfld => fld%data
-    gl = fld%glayer
 
+    ! Interior
     do j = 1, fld%n
-      do i = 1, (fld%m+1)
-        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i-1+gl, j+gl)
+      do i = 2, fld%m
+        d_fld(i, j) = lfld(i, j) - lfld(i-1, j)
       end do
+    end do
+    
+    ! Boundary: 2nd extrapolation
+    ! f(x) = 2f(x+h) - f(x+2h) + O(h^2)
+    do j = 1, fld%n
+      d_fld(1, j) = 2.0_dp*d_fld(2, j) - d_fld(3, j)
+      d_fld(fld%m+1, j) = 2.0_dp*d_fld(fld%m, j) - d_fld(fld%m-1, j)
     end do
 
   end subroutine dx_field
@@ -526,17 +516,24 @@ contains
   subroutine dy_field(d_fld, fld)
     real(kind=dp), dimension(:,:), intent(out) :: d_fld
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
     real(kind = dp), dimension(:, :), pointer :: lfld
 
     lfld => fld%data
-    gl = fld%glayer
 
-    do j = 1, (fld%n+1)
+    ! Interior
+    do j = 2, fld%n
       do i = 1, fld%m
-        d_fld(i, j) = lfld(i+gl, j+gl) - lfld(i+gl, j-1+gl)
+        d_fld(i, j) = lfld(i, j) - lfld(i, j-1)
       end do
+    end do
+    
+    ! Boundary: 2nd extrapolation
+    ! f(x) = 2f(x+h) - f(x+2h) + O(h^2)
+    do i = 1, fld%m
+      d_fld(i, 1) = 2.0_dp*d_fld(i, 2) - d_fld(i, 3)
+      d_fld(i, fld%n+1) = 2.0_dp*d_fld(i, fld%n) - d_fld(i, fld%n-1)
     end do
 
   end subroutine dy_field
@@ -544,35 +541,36 @@ contains
   subroutine dx_field_HoriEdge(d_fld, fld)
     real(kind=dp), dimension(:,:), intent(out) :: d_fld
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
     real(kind = dp), dimension(:, :), pointer :: lfld
 
-    ! Exclude ghost cell in dx_field and dy_field
     lfld => fld%data
-    gl = fld%glayer
 
-    do i = 1, fld%m
-      d_fld(i, 1) = 0.0_dp          ! Bottom
-      d_fld(i, fld%n+1) = 0.0_dp    ! Top
-    end do
-
-    ! To be replaced: can delete
+    ! Left & Right, Near Boundary: 2nd extrapolation
+    ! f'(x) = 1/h*(-3/2*f(x) +2f(x+h) -1/2*f(x+2h)) + O(h^2)
     do j = 2, fld%n
-      d_fld(1, j) = -0.75_dp*(lfld(1+gl, j-1+gl)+lfld(1+gl, j+gl)) &
-                    + (lfld(2+gl, j-1+gl)+lfld(2+gl, j+gl)) &
-                    - 0.25_dp*(lfld(3+gl, j-1+gl)+lfld(3+gl, j+gl))  ! Left
-      d_fld(fld%m, j) = 0.75_dp*(lfld(fld%m+gl, j-1+gl)+lfld(fld%m+gl, j+gl)) &
-                    - (lfld(fld%m-1+gl, j-1+gl)+lfld(fld%m-1+gl, j+gl)) &
-                    + 0.25_dp*(lfld(fld%m-2+gl, j-1+gl)+lfld(fld%m-2+gl, j+gl))  ! Right
+      d_fld(1, j) = -0.75_dp*(lfld(1, j-1)+lfld(1, j)) &
+                    + (lfld(2, j-1)+lfld(2, j)) &
+                    - 0.25_dp*(lfld(3, j-1)+lfld(3, j))  ! Left
+      d_fld(fld%m, j) = 0.75_dp*(lfld(fld%m, j-1)+lfld(fld%m, j)) &
+                    - (lfld(fld%m-1, j-1)+lfld(fld%m-1, j)) &
+                    + 0.25_dp*(lfld(fld%m-2, j-1)+lfld(fld%m-2, j))  ! Right
     end do
-    ! End: can delete 
 
+    ! Interior
     do j = 2, fld%n
       do i = 2, (fld%m-1)
-        d_fld(i, j) = 0.25_dp*(lfld(i+1+gl, j+gl) + lfld(i+1+gl, j-1+gl) &
-                    - lfld(i-1+gl, j+gl) - lfld(i-1+gl, j-1+gl))      ! Interior
+        d_fld(i, j) = 0.25_dp*(lfld(i+1, j) + lfld(i+1, j-1) &
+                    - lfld(i-1, j) - lfld(i-1, j-1))
       end do
+    end do
+    
+    ! Boundary: Bottom & Top
+    ! 2nd extrapolation: f(x) = 2f(x+h) - f(x+2h) + O(h^2)
+    do i = 1, fld%m
+      d_fld(i, 1) = 2.0_dp*d_fld(i, 2) - d_fld(i, 3)
+      d_fld(i, fld%n+1) = 2.0_dp*d_fld(i, fld%n) - d_fld(i, fld%n-1)
     end do
 
   end subroutine dx_field_HoriEdge
@@ -580,34 +578,36 @@ contains
   subroutine dy_field_VertEdge(d_fld, fld)
     real(kind=dp), dimension(:,:), intent(out) :: d_fld
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
     real(kind = dp), dimension(:, :), pointer :: lfld
 
     lfld => fld%data
-    gl = fld%glayer
-    
-    ! To be replaced: can delete
+
+    ! Top & Bottom, Near Boundary: 2nd extrapolation
+    ! f'(x) = 1/h*(-3/2*f(x) +2f(x+h) -1/2*f(x+2h)) + O(h^2)
     do i = 2, fld%m
-      d_fld(i, 1) = -0.75_dp*(lfld(i-1+gl, 1+gl)+lfld(i+gl, 1+gl)) &
-                    + (lfld(i-1+gl, 2+gl)+lfld(i+gl, 2+gl)) &
-                    - 0.25_dp*(lfld(i-1+gl, 3+gl)+lfld(i+gl, 3+gl))   ! Bottom
-      d_fld(i, fld%n) = 0.75_dp*(lfld(i-1+gl, fld%n+gl)+lfld(i+gl, fld%n+gl)) &
-                    - (lfld(i-1+gl, fld%n-1+gl)+lfld(i+gl, fld%n-1+gl)) &
-                    + 0.25_dp*(lfld(i-1+gl, fld%n-2+gl)+lfld(i+gl, fld%n-2+gl))  ! Top
-    end do
-    ! End: can delete 
-
-    do j = 1, fld%n
-      d_fld(1, j) = 0.0_dp          ! Left
-      d_fld(fld%m+1, j) = 0.0_dp    ! Right
+      d_fld(i, 1) = -0.75_dp*(lfld(i-1, 1)+lfld(i, 1)) &
+                    + (lfld(i-1, 2)+lfld(i, 2)) &
+                    - 0.25_dp*(lfld(i-1, 3)+lfld(i, 3))   ! Bottom
+      d_fld(i, fld%n) = 0.75_dp*(lfld(i-1, fld%n)+lfld(i, fld%n)) &
+                    - (lfld(i-1, fld%n-1)+lfld(i, fld%n-1)) &
+                    + 0.25_dp*(lfld(i-1, fld%n-2)+lfld(i, fld%n-2))  ! Top
     end do
 
+    ! Interior
     do j = 2, (fld%n-1)
       do i = 2, fld%m
-        d_fld(i, j) = 0.25_dp*(lfld(i+gl, j+1+gl) + lfld(i-1+gl, j+1+gl) &
-                    - lfld(i+gl, j-1+gl) - lfld(i-1+gl, j-1+gl))     ! Interior
+        d_fld(i, j) = 0.25_dp*(lfld(i, j+1) + lfld(i-1, j+1) &
+                    - lfld(i, j-1) - lfld(i-1, j-1))
       end do
+    end do
+    
+    ! Boundary: Left & Right
+    ! 2nd extrapolation: f(x) = 2f(x+h) - f(x+2h) + O(h^2)
+    do j = 1, fld%n
+      d_fld(1, j) = 2.0_dp*d_fld(2, j) - d_fld(3, j)
+      d_fld(fld%m+1, j) = 2.0_dp*d_fld(fld%m, j) - d_fld(fld%m-1, j)
     end do
     
   end subroutine dy_field_VertEdge
@@ -620,13 +620,14 @@ contains
     m = size(dqy_G, 1)
     n = size(dqx_F, 2)
 
+    ! Left & Right, Near Boundary; Use BC
     do j = 2, n
       dqx_G(1, j) = 0.5_dp*( &
         - K12(1,j)/K11(1,j)*(1.5_dp*dqy_G(1,j) - 0.5_dp*dqy_G(2,j)) &
-        + 0.5_dp* dqx_F(2,j) + 0.5_dp* dqx_F(2,j-1) )  ! Left
+        + 0.5_dp* dqx_F(2,j) + 0.5_dp* dqx_F(2,j-1) )
       dqx_G(m, j) = 0.5_dp*( &
         - K12(m+1,j)/K11(m+1,j)*(1.5_dp*dqy_G(m,j) - 0.5_dp*dqy_G(m-1,j)) &
-        + 0.5_dp* dqx_F(m,j) + 0.5_dp* dqx_F(m,j-1) )  ! Right
+        + 0.5_dp* dqx_F(m,j) + 0.5_dp* dqx_F(m,j-1) )
     end do
 
   end subroutine dx_field_HoriEdge_BC
@@ -640,64 +641,17 @@ contains
     m = size(dqy_G, 1)
     n = size(dqx_F, 2)
     
+    ! Bottom & Top, Near Boundary; Use BC
     do i = 2, m
       dqy_F(i, 1) = 0.5_dp*( &
         - K12(i,1)/K22(i,1)*(1.5_dp*dqx_F(i,1) - 0.5_dp*dqx_F(i,2)) &
-        + 0.5_dp* dqy_G(i,2) + 0.5_dp* dqy_G(i-1,2) )  ! Left
+        + 0.5_dp* dqy_G(i,2) + 0.5_dp* dqy_G(i-1,2) )
       dqy_F(i, n) = 0.5_dp*( &
         - K12(i,n+1)/K22(i,n+1)*(1.5_dp*dqx_F(i,n) - 0.5_dp*dqx_F(i,n-1)) &
-        + 0.5_dp* dqy_G(i,n) + 0.5_dp* dqy_G(i-1,n) )  ! Right
+        + 0.5_dp* dqy_G(i,n) + 0.5_dp* dqy_G(i-1,n) )
     end do
     
   end subroutine dy_field_VertEdge_BC
-  
-  
-  subroutine manual_field(fld, param)
-    type(field), intent(out) :: fld
-    integer, intent(in) :: param
-    integer :: i, j
-    real(kind = dp) :: im, jm, x, y
-
-    real(kind = dp), dimension(:, :), pointer :: lfld
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-
-    lfld => fld%data
-
-    do j = 1, size(fld%data,2)
-      do i = 1, size(fld%data,1)
-        if (param .eq. 1) then
-          lfld(i, j) = 2.0_dp * real(i)
-        elseif (param .eq. 2) then
-          lfld(i, j) = real(j)*real(i)
-          !lfld(i, j) = (fld%n-real(j))*(fld%m-real(i))
-        elseif (param .eq. 3) then
-          lfld(i, j) = (1.0_dp/(2.0_dp*Pi*(real(fld%m)/16)**2)) &
-                      * dexp( ((real(i)-0.5_dp*real(fld%m))**  2+(real(j)-0.5_dp*real(fld%n))**2) &
-                      /(-2.0_dp*((real(fld%m)/16)**2)) )
-        elseif (param .eq. 4) then
-          if ((i .eq. fld%m/2) .and. (j .eq. fld%n/2)) then
-            lfld(i, j) = 1.0_dp
-          else
-            lfld(i, j) = 0.0_dp
-          end if
-        elseif (param .eq. 5) then
-            lfld(i, j) = 2.0_dp *i + 3.0_dp *j - 1.0* i*j
-            !lfld(i, j) = 2.0_dp *i
-        elseif (param .eq. 6) then
-            ! Ridge body rotation for psi
-            im = (fld%m+1+fld%type_id)*0.5_dp
-            jm = (fld%n+1+fld%type_id)*0.5_dp
-            lfld(i, j) = 0.5_dp*( (i-im)*(i-im) + (j-jm)*(j-jm))
-        elseif (param .eq. 7) then
-            ! TG
-            x = fld_x(i, fld%m, fld%type_id)  ! in [0, 1]
-            y = fld_x(j, fld%n, fld%type_id)  ! in [0, 1]
-            fld%data(i, j) = fld%m*fld%n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
-        end if
-      end do
-    end do
-
-  end subroutine manual_field
   
   subroutine testcase_fields(psi, K11, K22, K12, q)
     type(field), intent(inout) :: psi, K11, K22, K12, q
@@ -711,9 +665,6 @@ contains
 
     ! test case = 2-Period q
     ! psi
-    if (psi%glayer .ne. 0) &
-      call abort_handle("There should not be ghost layer in psi!", __FILE__, __LINE__)
-    
     if (psi%type_id .ne. 1) &
       call abort_handle("psi not defined at corners", __FILE__, __LINE__)
     
@@ -729,9 +680,6 @@ contains
     end do
 
     ! K11, K22, K12
-    if (K11%glayer .ne. 0) &
-      call abort_handle("There should not be ghost layer in K11!", __FILE__, __LINE__)
-    
     if (K11%type_id .ne. 1) &
       call abort_handle("K11 not defined at corners", __FILE__, __LINE__)
     
@@ -761,16 +709,12 @@ contains
     integer :: i, j
     
     real(kind = dp) :: x, y
-    integer :: gl
     
-    ! q0
-    gl = q%glayer
-      
     do j = 1, q%n
       do i = 1, q%m
         x = fld_x(i, q%m, q%type_id)
         y = fld_x(j, q%n, q%type_id)
-        q%data(i+gl, j+gl) = q_periodic(x,y,t)
+        q%data(i, j) = q_periodic(x,y,t)
       end do
     end do
     
@@ -811,6 +755,7 @@ contains
     
     if (type_id .eq. 1) then
       ! Defined at corners
+      ! m = number of cells, not number of corners
       fld_x = (real(i,kind=dp)-1.0_dp)/real(m,kind=dp)
     else
       ! Defined at centres
@@ -820,14 +765,12 @@ contains
   
   pure real(kind=dp) function int_field(fld)
     type(field), intent(in) :: fld
-    integer :: i, j, gl
-
-    gl = fld%glayer
+    integer :: i, j
 
     int_field = 0.0_dp
 
-    do j = (1+gl), (fld%n+gl)
-      do i = (1+gl), (fld%m+gl)
+    do j = 1, fld%n
+      do i = 1, fld%m
         int_field = int_field + fld%data(i,j)
       end do
     end do
@@ -836,55 +779,36 @@ contains
   
   pure real(kind=dp) function int_sq_field(fld)
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
-    gl = fld%glayer
 
     int_sq_field = 0.0_dp
 
-    do j = (1+gl), (fld%n+gl)
-      do i = (1+gl), (fld%m+gl)
+    do j = 1, fld%n
+      do i = 1, fld%m
         int_sq_field = int_sq_field + fld%data(i,j) ** 2
       end do
     end do
 
   end function int_sq_field
 
-  pure real(kind=dp) function eval_field(fld, i, j)
-    type(field), intent(in) :: fld
-    integer, intent(in) :: i, j
-
-    integer :: gl
-
-    gl = fld%glayer
-
-    ! Piecewise constant field
-    eval_field = fld%data(i+gl,j+gl)
-
-  end function eval_field
-
   subroutine indicator_field(fld, i, j)
     type(field), intent(inout) :: fld
     integer, intent(in) :: i, j
 
-    integer :: gl
-
-    gl = fld%glayer
-
-    fld%data(i+gl,j+gl) = 1.0_dp
+    fld%data(i,j) = 1.0_dp
 
   end subroutine indicator_field
 
   pure integer function count_neg(fld)
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
-    gl = fld%glayer
     count_neg = 0
 
     do j = 1, fld%n
       do i = 1, fld%m
-        if (fld%data(i+gl, j+gl) < 0.0_dp) count_neg = count_neg + 1
+        if (fld%data(i, j) .lt. 0.0_dp) count_neg = count_neg + 1
       end do
     end do
 
@@ -892,15 +816,14 @@ contains
 
   pure real(kind=dp) function max_neg(fld)
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
-    gl = fld%glayer
     max_neg = 0.0_dp
 
     do j = 1, fld%n
       do i = 1, fld%m
-        if (fld%data(i+gl,j+gl) < 0.0_dp) then
-          max_neg = fld%data(i+gl,j+gl)
+        if (fld%data(i,j) .lt. 0.0_dp) then
+          max_neg = fld%data(i,j)
           !exit
         end if
       end do
@@ -908,8 +831,8 @@ contains
 
     do j = 1, fld%n
       do i = 1, fld%m
-        if ((fld%data(i+gl,j+gl) < 0.0_dp) .and. (fld%data(i+gl,j+gl) >= max_neg)) then
-          max_neg = fld%data(i+gl,j+gl)
+        if ((fld%data(i,j) .lt. 0.0_dp) .and. (fld%data(i,j) >= max_neg)) then
+          max_neg = fld%data(i,j)
         end if
       end do
     end do
@@ -918,14 +841,13 @@ contains
 
   pure real(kind=dp) function neg_int(fld)
     type(field), intent(in) :: fld
-    integer :: i, j, gl
+    integer :: i, j
 
-    gl = fld%glayer
     neg_int = 0.0_dp
 
     do j = 1, fld%n
       do i = 1, fld%m
-        if (fld%data(i+gl,j+gl) < 0.0_dp) neg_int = neg_int + fld%data(i+gl,j+gl)
+        if (fld%data(i,j) .lt. 0.0_dp) neg_int = neg_int + fld%data(i,j)
       end do
     end do
 
@@ -939,7 +861,6 @@ contains
     write(6, "(a,i0)") "|  type_id: ", fld%type_id
     write(6, "(a,i0,a,i0)") "|  size(fld%data, 1), size(fld%data, 2): ", size(fld%data, 1), ", ", size(fld%data, 2)
     write(6, "(a,i0,a,i0,a,i0)") "|  m, n, dof: ", fld%m, ", ", fld%n, ", ", fld%m*fld%n
-    write(6, "(a,i0)") "|  ghost layer: ", fld%glayer
     write(6, "(a,i0,a,i0)") "|  Negative dof = ", count_neg(fld), " out of ", fld%m*fld%n
     write(6, "(a,"//dp_chr//",a,"//dp_chr//")") "|  Least -ve dof = ", max_neg(fld), "; -ve_int ", neg_int(fld)
     write(6, "(a,"//dp_chr//",a,"//dp_chr//")") "|  Max = ", maxval(fld%data), "; Min = ", minval(fld%data)
@@ -962,7 +883,7 @@ contains
     iszero = .true.
     do j = 1, size(fld, 2)
       do i = 1, size(fld, 1)
-        if (abs(fld(i,j)) > 1e-13) then
+        if (abs(fld(i,j)) .gt. 1e-13) then
           iszero = .false.
         end  if
       end do

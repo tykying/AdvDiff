@@ -49,7 +49,7 @@ contains
     character(len = field_name_len) :: name
     character(len = max_line_len) :: format_chr, input_chr
     character(len = len_trim(filename) + 1 + max_int_len) :: lfilename
-    integer :: i, m, n, glayer, type_id
+    integer :: i, m, n, type_id
 
     if(present(index)) then
       write(lfilename, "(a,a,i0)") trim(filename), "_", index
@@ -68,12 +68,11 @@ contains
     i = scan(input_chr, " ")
     write(format_chr, "(a,i0,a)") "(i", i - 1, ",a1,"//int_chr//")"
     read(input_chr, trim(format_chr)) m, chr, n
-    read(input_unit, "("//int_chr//")") glayer
     read(input_unit, "("//int_chr//")") type_id
     read(input_unit, "("//dp_chr//")") t
     close(input_unit)
 
-    call allocate(fld, m, n, name, glayer=glayer, type_id=type_id)
+    call allocate(fld, m, n, name, type_id=type_id)
 
   end subroutine read_field_header
 
@@ -118,7 +117,6 @@ contains
     write(output_unit, "(a)") "serial"
     write(output_unit, "(a)") trim(fld%name)
     write(output_unit, "(i0,a,i0)") fld%m, " ", fld%n
-    write(output_unit, "(i0)") fld%glayer
     write(output_unit, "(i0)") fld%type_id
     write(output_unit, "("//dp_chr//")") t
     close(output_unit)
@@ -511,7 +509,7 @@ contains
     read(input_unit, "("//dp_chr//")") t
     close(input_unit)
 
-    call allocate(fld, m-1, n-1, name, glayer=0, type_id=1)
+    call allocate(fld, m-1, n-1, name, type_id=1)
 
   end subroutine read_QGfield_header
 

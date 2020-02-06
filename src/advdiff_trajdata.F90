@@ -181,8 +181,7 @@ contains
     j = k2j(k,mesh%m)
 
     ! Piecewise constant within the cell
-    !eval_fldpt_rect = fld%data(i,j)
-    eval_fldpt_rect = eval_field(fld, i, j)  ! in advdiff_field.F90
+    eval_fldpt_rect = fld%data(i, j)
 
   end function eval_fldpt_rect
 
@@ -220,10 +219,10 @@ contains
 
     ! Bilinear interpolation
     eval_fldpt_rect_intpl = &
-        eval_field(fld,i0,j0)*(1.0_dp-alpha_x)*(1.0_dp-alpha_y) &
-      + eval_field(fld,i1,j0)*alpha_x*(1.0_dp-alpha_y) &
-      + eval_field(fld,i0,j1)*(1.0_dp-alpha_x)*alpha_y &
-      + eval_field(fld,i1,j1)*alpha_x*alpha_y  ! in advdiff_field.F90
+        fld%data(i0,j0)*(1.0_dp-alpha_x)*(1.0_dp-alpha_y) &
+      + fld%data(i1,j0)*alpha_x*(1.0_dp-alpha_y) &
+      + fld%data(i0,j1)*(1.0_dp-alpha_x)*alpha_y &
+      + fld%data(i1,j1)*alpha_x*alpha_y
 
   end function eval_fldpt_rect_intpl
 
