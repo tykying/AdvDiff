@@ -759,7 +759,7 @@ contains
     ! log-Prior
     logPrior =  evaluate_logPrior(dof_solver, prior_param)
     
-    if (logPrior .gt. -1e-15) then
+    if (logPrior .gt. -1D-15) then
       ! log-likelihood
       allocate(loglik(IndFn%nIND))
       

@@ -2,9 +2,7 @@
 
 module advdiff_debug
   use advdiff_precision
-#if OMP0MPI1 == 1
   use mpi
-#endif
 
   implicit none
 
@@ -29,10 +27,7 @@ contains
     write(0, "(a,a,a,i0,a,a)") "ERROR on line ", trim(file), ":", line, ": ", &
       & trim(msg)
     flush(0)
-#if OMP0MPI1 == 1
     call MPI_Abort(MPI_COMM_WORLD, MPI_ERR_OTHER, ierr)
-#endif
-    stop 1
     
   end subroutine abort_handle
 

@@ -6,23 +6,20 @@ module advdiff_field
 
   private
 
-  public :: field, field_ptr, allocate, deallocate, zeros, &
+  public :: field, allocate, deallocate, zeros, &
     & scale, set, addto, addto_product, &
     & dx_field, dy_field, &
     & psi_to_uv, int_field, int_sq_field, &
-    & iszero, &
-    & dx_field_HoriEdge, dy_field_VertEdge, &
-    & dx_field_HoriEdge_BC, dy_field_VertEdge_BC
+    & iszero, reset_Flux, &
+    & dx_field_HoriEdge, dy_field_VertEdge
     
   public :: indicator_field
-  public :: uv_signed, K_flux
-  public :: print_info, diff_int
-  public :: testcase_fields, fld_x, assign_q_periodic, S_rhs_nonstat
+  public :: uv_signed, K_grid, FluxGrid
+  public :: print_info, diff_int, fld_x
   public :: bilinear_intpl, pwc_intpl, sine_filter, linear_intpl
   public :: neg_int
   public :: dt_CFL
   
-  ! Note: field and field_ptr are different
   type field
     integer :: m, n
     real(kind = dp), dimension(:, :), pointer :: data  ! It is an array, not a pointer
@@ -30,27 +27,31 @@ module advdiff_field
     integer :: type_id
   end type field
 
-  type field_ptr
-    type(field), pointer :: ptr
-  end type field_ptr
-
   type uv_signed
     real(kind = dp), dimension(:, :), pointer :: up, um, vp, vm
     real(kind = dp), dimension(:, :), pointer :: u_abs, v_abs
     integer, dimension(:, :), pointer :: u_sgn, v_sgn
   end type uv_signed
 
-  type K_flux
+  type K_grid
     real(kind = dp), dimension(:, :), pointer :: K11e, K21e, K12e, K22e
     real(kind = dp), dimension(:, :), pointer :: K11c, K12c, K22c
-  end type K_flux
+  end type K_grid
 
+  type FluxGrid
+    real(kind = dp), dimension(:, :), pointer :: F, G
+    real(kind = dp), dimension(:, :), pointer :: dqx_F, dqy_F, dqx_G, dqy_G
+  end type FluxGrid
+
+  
   interface allocate
-    module procedure allocate_field, allocate_uv, allocate_Kflux
+    module procedure allocate_field, allocate_uv, &
+                     allocate_Kgrid, allocate_FluxGrid
   end interface allocate
 
   interface deallocate
-    module procedure deallocate_field, deallocate_uv, deallocate_Kflux
+    module procedure deallocate_field, deallocate_uv, & 
+                     deallocate_Kgrid, deallocate_FluxGrid
   end interface deallocate
 
   interface zeros
@@ -280,12 +281,7 @@ contains
     ! maxmin u and v wrt 0
     do j = 1, size(uv_fld%up, 2)
       do i = 1, size(uv_fld%up, 1)
-        if (dabs(uv_fld%up(i,j)) .gt. 1D-14) then
-          uv_fld%u_sgn(i,j) = int(sign(1.0_dp, uv_fld%up(i,j)))
-        else
-          uv_fld%u_sgn(i,j) = 0
-        end if
-
+        uv_fld%u_sgn(i,j) = int(sign(1.0_dp, uv_fld%up(i,j)))
         uv_fld%u_abs(i,j) = dabs(uv_fld%up(i,j))
         uv_fld%um(i,j) = min(uv_fld%up(i, j), 0.0_dp)
         uv_fld%up(i,j) = max(uv_fld%up(i, j), 0.0_dp)
@@ -294,12 +290,7 @@ contains
 
     do j = 1, size(uv_fld%vp, 2)
       do i = 1, size(uv_fld%vp, 1)
-        if (dabs(uv_fld%vp(i,j)) .gt. 1D-14) then
-          uv_fld%v_sgn(i,j) = int(sign(1.0_dp, uv_fld%vp(i,j)))
-        else
-          uv_fld%v_sgn(i,j) = 0
-        end if
-  
+        uv_fld%v_sgn(i,j) = int(sign(1.0_dp, uv_fld%vp(i,j))) 
         uv_fld%v_abs(i,j) = dabs(uv_fld%vp(i,j))
         uv_fld%vm(i,j) = min(uv_fld%vp(i, j), 0.0_dp)
         uv_fld%vp(i,j) = max(uv_fld%vp(i, j), 0.0_dp)
@@ -322,8 +313,8 @@ contains
 
   end subroutine deallocate_uv
 
-  subroutine allocate_Kflux(K_e, K11, K22, K12)
-    type(K_flux), intent(inout) :: K_e
+  subroutine allocate_Kgrid(K_g, K11, K22, K12)
+    type(K_grid), intent(inout) :: K_g
     type(field), intent(in) :: K11, K22, K12
 
     integer :: m, n, i, j
@@ -337,23 +328,23 @@ contains
       call abort_handle("Wrong K11%type_id", __FILE__, __LINE__)
     end if 
     
-    allocate(K_e%K11e(m+1, n))  ! Define at vertical edges
-    allocate(K_e%K12e(m+1, n))  ! Define at vertical edges
-    allocate(K_e%K21e(m, n+1))  ! Define at horizonal edges
-    allocate(K_e%K22e(m, n+1))  ! Define at horizonal edges
+    allocate(K_g%K11e(m+1, n))  ! Define at vertical edges
+    allocate(K_g%K12e(m+1, n))  ! Define at vertical edges
+    allocate(K_g%K21e(m, n+1))  ! Define at horizonal edges
+    allocate(K_g%K22e(m, n+1))  ! Define at horizonal edges
     
-    allocate(K_e%K11c(m+1, n+1))  ! Define at corners
-    allocate(K_e%K22c(m+1, n+1))  ! Define at corners
-    allocate(K_e%K12c(m+1, n+1))  ! Define at corners
+    allocate(K_g%K11c(m+1, n+1))  ! Define at corners
+    allocate(K_g%K22c(m+1, n+1))  ! Define at corners
+    allocate(K_g%K12c(m+1, n+1))  ! Define at corners
     
-    K11e => K_e%K11e
-    K12e => K_e%K12e
-    K21e => K_e%K21e
-    K22e => K_e%K22e
+    K11e => K_g%K11e
+    K12e => K_g%K12e
+    K21e => K_g%K21e
+    K22e => K_g%K22e
 
-    K_e%K11c = K11%data
-    K_e%K22c = K22%data
-    K_e%K12c = K12%data
+    K_g%K11c = K11%data
+    K_g%K22c = K22%data
+    K_g%K12c = K12%data
     
     ! K: at corners
     ! For K11 and K12
@@ -371,21 +362,63 @@ contains
       end do
     end do
     
-  end subroutine allocate_Kflux
+  end subroutine allocate_Kgrid
 
-  subroutine deallocate_Kflux(K_e)
-    type(K_flux), intent(inout) :: K_e
+  subroutine deallocate_Kgrid(K_g)
+    type(K_grid), intent(inout) :: K_g
 
-    deallocate(K_e%K11e)
-    deallocate(K_e%K21e)
-    deallocate(K_e%K12e)
-    deallocate(K_e%K22e)
+    deallocate(K_g%K11e)
+    deallocate(K_g%K21e)
+    deallocate(K_g%K12e)
+    deallocate(K_g%K22e)
     
-    deallocate(K_e%K11c)
-    deallocate(K_e%K22c)
-    deallocate(K_e%K12c)
+    deallocate(K_g%K11c)
+    deallocate(K_g%K22c)
+    deallocate(K_g%K12c)
     
-  end subroutine deallocate_Kflux
+  end subroutine deallocate_Kgrid
+  
+  subroutine allocate_FluxGrid(Flux, m, n)
+    type(FluxGrid), intent(inout) :: Flux
+    integer, intent(in) :: m, n
+    
+    ! Flux terms
+    allocate(Flux%F(m+1, n))
+    allocate(Flux%G(m, n+1))
+    
+    ! Gradient terms
+    allocate(Flux%dqx_F(m+1, n))
+    allocate(Flux%dqy_F(m+1, n))
+    allocate(Flux%dqx_G(m, n+1))
+    allocate(Flux%dqy_G(m, n+1))
+    
+    call reset_Flux(Flux)
+    
+  end subroutine allocate_FluxGrid
+
+  subroutine deallocate_FluxGrid(Flux)
+    type(FluxGrid), intent(inout) :: Flux
+
+    deallocate(Flux%F)
+    deallocate(Flux%G)
+   
+    deallocate(Flux%dqx_F)
+    deallocate(Flux%dqy_F)
+    deallocate(Flux%dqx_G)
+    deallocate(Flux%dqy_G)
+    
+  end subroutine deallocate_FluxGrid
+  
+  subroutine reset_Flux(Flux)
+    type(FluxGrid), intent(inout) :: Flux
+
+    Flux%F = 0.0_dp
+    Flux%G = 0.0_dp
+    Flux%dqx_F = 0.0_dp
+    Flux%dqy_F = 0.0_dp
+    Flux%dqx_G = 0.0_dp
+    Flux%dqy_G = 0.0_dp
+  end subroutine reset_Flux
 
   subroutine zero_field(fld)
     type(field), intent(inout) :: fld
@@ -486,7 +519,7 @@ contains
   end subroutine psi_to_uv
 
   subroutine dx_field(d_fld, fld)
-    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    real(kind=dp), dimension(:,:), intent(inout) :: d_fld
     type(field), intent(in) :: fld
     integer :: i, j
 
@@ -514,7 +547,7 @@ contains
   end subroutine dx_field
 
   subroutine dy_field(d_fld, fld)
-    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    real(kind=dp), dimension(:,:), intent(inout) :: d_fld
     type(field), intent(in) :: fld
     integer :: i, j
 
@@ -539,7 +572,7 @@ contains
   end subroutine dy_field
 
   subroutine dx_field_HoriEdge(d_fld, fld)
-    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    real(kind=dp), dimension(:,:), intent(inout) :: d_fld
     type(field), intent(in) :: fld
     integer :: i, j
 
@@ -576,7 +609,7 @@ contains
   end subroutine dx_field_HoriEdge
 
   subroutine dy_field_VertEdge(d_fld, fld)
-    real(kind=dp), dimension(:,:), intent(out) :: d_fld
+    real(kind=dp), dimension(:,:), intent(inout) :: d_fld
     type(field), intent(in) :: fld
     integer :: i, j
 
@@ -611,144 +644,6 @@ contains
     end do
     
   end subroutine dy_field_VertEdge
-  
-  subroutine dx_field_HoriEdge_BC(dqx_G, dqx_F, dqy_G, K11, K12)
-    real(kind=dp), dimension(:,:), intent(inout) :: dqx_G
-    real(kind=dp), dimension(:,:), intent(in) :: dqx_F, dqy_G, K11, K12
-    integer :: j, m, n
-
-    m = size(dqy_G, 1)
-    n = size(dqx_F, 2)
-
-    ! Left & Right, Near Boundary; Use BC
-    do j = 2, n
-      dqx_G(1, j) = 0.5_dp*( &
-        - K12(1,j)/K11(1,j)*(1.5_dp*dqy_G(1,j) - 0.5_dp*dqy_G(2,j)) &
-        + 0.5_dp* dqx_F(2,j) + 0.5_dp* dqx_F(2,j-1) )
-      dqx_G(m, j) = 0.5_dp*( &
-        - K12(m+1,j)/K11(m+1,j)*(1.5_dp*dqy_G(m,j) - 0.5_dp*dqy_G(m-1,j)) &
-        + 0.5_dp* dqx_F(m,j) + 0.5_dp* dqx_F(m,j-1) )
-    end do
-
-  end subroutine dx_field_HoriEdge_BC
-  
-  subroutine dy_field_VertEdge_BC(dqy_F, dqx_F, dqy_G, K12, K22)
-    real(kind=dp), dimension(:,:), intent(inout) :: dqy_F
-    real(kind=dp), dimension(:,:), intent(in) :: dqx_F, dqy_G, K12, K22
-    
-    integer :: i, m, n
-    
-    m = size(dqy_G, 1)
-    n = size(dqx_F, 2)
-    
-    ! Bottom & Top, Near Boundary; Use BC
-    do i = 2, m
-      dqy_F(i, 1) = 0.5_dp*( &
-        - K12(i,1)/K22(i,1)*(1.5_dp*dqx_F(i,1) - 0.5_dp*dqx_F(i,2)) &
-        + 0.5_dp* dqy_G(i,2) + 0.5_dp* dqy_G(i-1,2) )
-      dqy_F(i, n) = 0.5_dp*( &
-        - K12(i,n+1)/K22(i,n+1)*(1.5_dp*dqx_F(i,n) - 0.5_dp*dqx_F(i,n-1)) &
-        + 0.5_dp* dqy_G(i,n) + 0.5_dp* dqy_G(i-1,n) )
-    end do
-    
-  end subroutine dy_field_VertEdge_BC
-  
-  subroutine testcase_fields(psi, K11, K22, K12, q)
-    type(field), intent(inout) :: psi, K11, K22, K12, q
-    integer :: i, j, m, n
-    
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-    real(kind = dp) :: x, y
-    
-    m = q%m
-    n = q%n
-
-    ! test case = 2-Period q
-    ! psi
-    if (psi%type_id .ne. 1) &
-      call abort_handle("psi not defined at corners", __FILE__, __LINE__)
-    
-    do j = 1, size(psi%data, 2)
-      do i = 1, size(psi%data, 1)
-        ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
-        x = fld_x(i, m, psi%type_id)  ! in [0, 1]
-        y = fld_x(j, n, psi%type_id)  ! in [0, 1]
-        psi%data(i, j) = m*n/((2.0_dp*Pi)**2) *dsin(2.0_dp*Pi*x)*dsin(Pi*y)
-        
-        if (dabs(psi%data(i, j)) .le. 1D-15) psi%data(i, j) = 0.0_dp
-      end do
-    end do
-
-    ! K11, K22, K12
-    if (K11%type_id .ne. 1) &
-      call abort_handle("K11 not defined at corners", __FILE__, __LINE__)
-    
-    do j = 1, size(K11%data, 2)
-      do i = 1, size(K11%data, 1)
-        ! Analytic formula: Defined on [0,1]^2 -> Need a prefactor to scale to [0,m] x [0,n]
-        x = fld_x(i, m, K11%type_id)
-        y = fld_x(j, n, K11%type_id)
-        K11%data(i, j) = m*m/(1000.0_dp)* 4.0_dp*dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
-        K22%data(i, j) = n*n/(1000.0_dp)* 2.0_dp*dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
-        K12%data(i, j) = m*n/(1000.0_dp)* dexp(-0.5_dp*((x-0.5_dp)**2+(y-0.75_dp)**2))
-        
-        if (dabs(K11%data(i, j)) .le. 1D-15) K11%data(i, j) = 0.0_dp
-        if (dabs(K22%data(i, j)) .le. 1D-15) K22%data(i, j) = 0.0_dp
-        if (dabs(K12%data(i, j)) .le. 1D-15) K12%data(i, j) = 0.0_dp
-      end do
-    end do
-    
-    ! q0
-    call assign_q_periodic(q, 0.0_dp)
-  end subroutine testcase_fields
-  
-  subroutine assign_q_periodic(q, t)
-    real(kind=dp), intent(in) :: t
-    type(field), intent(inout) :: q
-    
-    integer :: i, j
-    
-    real(kind = dp) :: x, y
-    
-    do j = 1, q%n
-      do i = 1, q%m
-        x = fld_x(i, q%m, q%type_id)
-        y = fld_x(j, q%n, q%type_id)
-        q%data(i, j) = q_periodic(x,y,t)
-      end do
-    end do
-    
-  end subroutine assign_q_periodic
-  
-  pure real(kind=dp) function q_periodic(x, y, t)
-    ! Define on [0, 1] times [0, 1]
-    real(kind = dp), intent(in) :: x, y, t
-    real(kind=dp), parameter :: Pi =  4.0_dp* datan (1.0_dp)
-    
-    q_periodic = 1.0_dp + dcos(Pi*t) * Pi**2 * (4.0_dp*x*(1.0_dp-y))**2*(4.0_dp*y*(1.0_dp-x))**3
-    
-  end function q_periodic
-  
-    pure real(kind=dp) function S_rhs_nonstat(x, y, t)
-    ! Define on [0, m] times [0, n]
-    real(kind = dp), intent(in) :: x, y, t
-    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
-    
-    real(kind = dp) :: dqt, udqx, vdqy, divKgradq
-    
-    dqt = -1024.0_dp*Pi**3*x**2*(1.0_dp-y)**2*y**3*(1.0_dp-x)**3*dsin(Pi*t)
-    udqx = 1280.0_dp*dcos(Pi*y)*Pi*y**3*dsin(2.0_dp*Pi*x)*(-2.0_dp/5.0_dp+x)*(-1.0_dp+y)**2*dcos(Pi*t)*x*(-1.0_dp+x)**2
-    vdqy = -512.0_dp*Pi*dcos(2.0_dp*Pi*x)*dsin(Pi*y)*x**2*y**2*(-1.0_dp+x)**3*dcos(Pi*t)*(5.0_dp*y**2-8.0_dp*y+3)
-    divKgradq = 0.01_dp* ( (512.0_dp*(-1.0_dp+x))*exp(-(0.5_dp)*x**2+(0.5_dp)*x-13.0_dp/32.0_dp-(0.5_dp)*y**2+0.75_dp*y)*Pi**2 &
-                * cos(Pi*t)*y*((y**3-8.0_dp/5.0_dp*(y**2)+3.0_dp/5.0_dp*y)*x**5 &
-                + (-12.0_dp/5.0_dp+6.0_dp*y**4-76.0_dp/5.0_dp*(y**3)+18.0_dp/5.0_dp*(y**2)+36.0_dp/5.0_dp*y)*x**4 &
-                + (24.0_dp/5.0_dp+y**5-287.0_dp/20.0_dp*(y**4)+191.0_dp/10.0_dp*(y**3)+53.0_dp/4.0_dp*(y**2)-111.0_dp/5.0_dp*y)*x**3 &
-                +(-7.0_dp/5.0_dp*(y**5)-23.0_dp/4.0_dp*(y**4)+57.0_dp/2.0_dp*(y**3)-731.0_dp/20.0_dp*(y**2)+84.0_dp/5.0_dp*y-12.0_dp/5.0_dp)*x**2 &
-                +(0.2_dp)*(2.0_dp*(-1.0_dp+y))*(y**3+113.0_dp/4.0_dp*(y**2)-157.0_dp/4.0_dp*y+6.0_dp)*y*x-8.0_dp*y**2*(-1.0_dp+y)**2*(0.2_dp)) )
-    
-    S_rhs_nonstat = dqt + udqx + vdqy - divKgradq
-    
-  end function S_rhs_nonstat
   
   pure real(kind=dp) function fld_x(i, m, type_id)
     integer, intent(in) :: i, m, type_id

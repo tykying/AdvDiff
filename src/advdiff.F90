@@ -53,15 +53,16 @@ contains
 
   subroutine unittest()
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
-    call unittest_operator_order()
     call unittest_comptools()
     call unittest_trajdata()
     call unittest_solver_properties()
     !call unittest_IO()
     !call unittest_timer()
     !call unittest_FPsolver_INPUT()
-    call unittest_solver_convergence()
     call unittest_interpolation()
+    call unittest_operator_order()
+    call unittest_BCflux_order()
+    call unittest_solver_convergence()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
 
@@ -78,11 +79,7 @@ contains
 #include "advdiff_configuration.h"
 
   subroutine inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
-#if OMP0MPI1 == 0
-    use omp_lib
-#elif OMP0MPI1 == 1
     use mpi
-#endif
     integer, intent(in) :: Td, layer, NPart, Phase, Seed_ID
     character(len=128), intent(in) :: path_arg
     
@@ -94,11 +91,6 @@ contains
 
     type(dofdat) :: dof, dof_MAP, dof_old
     type(IndFndat) :: IndFn
-
-#if IBACKWARD == 1
-    type(jumpsdat), dimension(:), allocatable :: jumps_inv
-    type(dofdat) :: dof_inv
-#endif
     
     real(kind=dp) :: sc, h, dt
     integer :: nts
@@ -135,10 +127,8 @@ contains
 
     ! MPI
     integer :: my_id, num_procs
-#if OMP0MPI1 == 1
     integer :: ierr !, PROVIDED, !! PROVIDED: For MPI-OpenMP
     real(kind=dp) :: SlogPost_local, SlogPost_global
-#endif
 
     integer, dimension(4) :: SEED
     
@@ -192,13 +182,7 @@ contains
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
-#if OMP0MPI1 == 0
-    my_id = 0
-    num_procs = 1
-    
-    !call omp_set_num_threads(16);
-    call allocate(IndFn, m_Ind, n_Ind)
-#elif OMP0MPI1 == 1
+
     call MPI_INIT( ierr )
     call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
     if (ierr .ne. MPI_SUCCESS) then 
@@ -210,7 +194,6 @@ contains
     end if
     
     call allocate(IndFn, m_Ind, n_Ind, my_id, num_procs)
-#endif
     
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
@@ -269,12 +252,6 @@ contains
     ! MCMC
     call allocate(dof_old, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
     call allocate(dof_MAP, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
-#if IBACKWARD == 1
-    call allocate(jumps_inv, mesh)
-    call traj2jumps_inv(jumps_inv, traj, mesh)
-    call allocate(dof_inv, dof%m_psi, dof%n_psi, dof%m_K, dof%n_K)
-    call reverse_dof_to_dof_inv(dof_inv, dof)   ! Set reverse psi
-#endif
 
     call deallocate(traj)
     
@@ -294,9 +271,7 @@ contains
       end if
     end if
     
-#if OMP0MPI1 == 0
-    dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-#elif OMP0MPI1 == 1
+    ! MPI
     SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
     
     SlogPost_global = 0.0_dp
@@ -307,7 +282,6 @@ contains
     end if
     
     dof%SlogPost = SlogPost_global
-#endif
 
     call set(dof_old, dof)
     call set(dof_MAP, dof)
@@ -316,8 +290,8 @@ contains
     allocate(stdnRV(niter*dof%ndof))
     allocate(UniRV(niter*dof%ndof))
     ! Seed must lie in (0, 4095), last entry must be odd
-    SEED = (/ mod(1989*Seed_ID, 4096), mod(28*Seed_ID, 4096), &
-            & mod(11*m_solver, 4096), mod(Td*6*Phase, 4096)+1 /)
+    SEED = (/ mod(89*Seed_ID*m_solver, 4096), mod(19*Seed_ID*Phase, 4096), &
+            & mod(11*m_solver*Td, 4096), mod(Td*6*Phase, 4096)+1 /)
     call randn(stdnRV, SEED)
     call randu(UniRV, SEED)
     
@@ -359,14 +333,7 @@ contains
         call propose_dof_canon(dof, canon_SSD, canon_id, stdnRV(RV_ind))
 #endif
         
-#if IBACKWARD == 1
-        call reverse_dof_to_dof_inv(dof_inv, dof)
-#endif
-        
         ! Evaluate likelihood
-#if OMP0MPI1 == 0
-        dof%SlogPost = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
-#elif OMP0MPI1 == 1
         SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
         
         SlogPost_global = 0.0_dp
@@ -377,7 +344,6 @@ contains
         end if
         
         dof%SlogPost = SlogPost_global
-#endif
         
         ! Metropolis-Hastings
         if (my_id .eq. (num_procs-1)) then
@@ -388,14 +354,12 @@ contains
           else
             accepted = 0
           end if
-        end if 
-
-#if OMP0MPI1 == 1
+        end if
+        
         call MPI_Bcast(accepted, 1, MPI_INT, (num_procs-1), MPI_COMM_WORLD,  ierr)
         if (ierr .ne. MPI_SUCCESS) then 
           call abort_handle("MPI Failed", __FILE__, __LINE__) 
         end if
-#endif
         
         if (accepted .eq. 1) then
           ! Accepted
@@ -466,15 +430,8 @@ contains
     call deallocate(dof)
     call deallocate(IndFn)
     call deallocate(jumps)
-    
-#if IBACKWARD == 1
-    call deallocate(dof_inv)
-    call deallocate(jumps_inv)
-#endif
 
-#if OMP0MPI1 == 1
     call MPI_FINALIZE(ierr)
-#endif
 
     if ((my_id .eq. (num_procs-1))) then
       write(6, "(a, "//dp_chr//")")  "Final step: logPost = ", dof_old%SlogPost

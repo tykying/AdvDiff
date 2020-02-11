@@ -13,12 +13,11 @@ module advdiff_timestep
   public :: imposeBC
   public :: advdiff_q
 
-  public :: timestep_heun_K
-  public :: timestep_heun_K_Src_nonstat
-  public :: timestep_LMT_2D
+  public :: timestep_heun_K, timestep_LMT_2D
+  public :: timestep_fe, eval_dqdt_K, eval_dqdt_FG
 
   interface imposeBC
-    module procedure imposeBC_FG
+    module procedure imposeBC_FG, imposeBC_Grad
   end interface imposeBC
 
   interface print_info
@@ -229,93 +228,89 @@ contains
     
   end subroutine imposeBC_FG
   
-  subroutine eval_dqdt_K(dqdt, q, K_e)
-    type(field), intent(inout) :: dqdt
-    type(field), intent(in) :: q
-    type(K_flux), intent(in) :: K_e
+  subroutine imposeBC_Grad(Flux, KGrid)
+    type(FluxGrid), intent(inout) :: Flux
+    type(K_grid), intent(in) :: KGrid
+    integer :: i, j, m, n
 
-    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx_F, dqy_F, dqx_G, dqy_G
+    real(kind = dp), dimension(:, :), pointer :: dqx_F, dqx_G, dqy_F, dqy_G
+    real(kind = dp), dimension(:, :), pointer :: K11, K22, K12
+
+    dqx_F => Flux%dqx_F
+    dqx_G => Flux%dqx_G
+    dqy_F => Flux%dqy_F
+    dqy_G => Flux%dqy_G
+
+    K11 => KGrid%K11c
+    K22 => KGrid%K22c
+    K12 => KGrid%K12c
     
-    allocate(F(q%m+1, q%n))
-    allocate(G(q%m, q%n+1))
+    m = size(dqy_G, 1)
+    n = size(dqx_F, 2)
+
+    ! Left & Right, Near Boundary; Use BC
+    do j = 2, n
+      dqx_G(1, j) = 0.5_dp*( &
+        - K12(1,j)/K11(1,j)*(1.5_dp*dqy_G(1,j) - 0.5_dp*dqy_G(2,j)) &
+        + 0.5_dp* dqx_F(2,j) + 0.5_dp* dqx_F(2,j-1) )
+      dqx_G(m, j) = 0.5_dp*( &
+        - K12(m+1,j)/K11(m+1,j)*(1.5_dp*dqy_G(m,j) - 0.5_dp*dqy_G(m-1,j)) &
+        + 0.5_dp* dqx_F(m,j) + 0.5_dp* dqx_F(m,j-1) )
+    end do
     
-    ! Evaluate F, G
-    allocate(dqx_F(q%m+1, q%n))
-    allocate(dqy_F(q%m+1, q%n))
-    allocate(dqx_G(q%m, q%n+1))
-    allocate(dqy_G(q%m, q%n+1))
+    ! Bottom & Top, Near Boundary; Use BC
+    do i = 2, m
+      dqy_F(i, 1) = 0.5_dp*( &
+        - K12(i,1)/K22(i,1)*(1.5_dp*dqx_F(i,1) - 0.5_dp*dqx_F(i,2)) &
+        + 0.5_dp* dqy_G(i,2) + 0.5_dp* dqy_G(i-1,2) )
+      dqy_F(i, n) = 0.5_dp*( &
+        - K12(i,n+1)/K22(i,n+1)*(1.5_dp*dqx_F(i,n) - 0.5_dp*dqx_F(i,n-1)) &
+        + 0.5_dp* dqy_G(i,n) + 0.5_dp* dqy_G(i-1,n) )
+    end do
     
-    call dx_field(dqx_F, q)
-    call dy_field_VertEdge(dqy_F, q)
+  end subroutine imposeBC_Grad
+  
+  subroutine eval_dqdt_K(dqdt, Flux, q, KGrid)
+    type(field), intent(inout) :: dqdt
+    type(FluxGrid), intent(inout) :: Flux
+    type(field), intent(in) :: q
+    type(K_grid), intent(in) :: KGrid
+
+    ! Compute gradients
+    call dx_field(Flux%dqx_F, q)
+    call dy_field_VertEdge(Flux%dqy_F, q)
     
-    call dx_field_HoriEdge(dqx_G, q)
-    call dy_field(dqy_G, q)
+    call dx_field_HoriEdge(Flux%dqx_G, q)
+    call dy_field(Flux%dqy_G, q)
     
-    ! Impose BC
-    call dx_field_HoriEdge_BC(dqx_G, dqx_F, dqy_G, K_e%K11c, K_e%K12c)
-    call dy_field_VertEdge_BC(dqy_F, dqx_F, dqy_G, K_e%K12c, K_e%K22c)
+    ! Impose BC for the gradient terms
+    call imposeBC(Flux, KGrid)
     
-    F = -(K_e%K11e * dqx_F + K_e%K12e * dqy_F)
-    G = -(K_e%K21e * dqx_G + K_e%K22e * dqy_G)
+    Flux%F = -(KGrid%K11e * Flux%dqx_F + KGrid%K12e * Flux%dqy_F)
+    Flux%G = -(KGrid%K21e * Flux%dqx_G + KGrid%K22e * Flux%dqy_G)
+
+    ! Impose BC for the flux terms
+    call imposeBC(Flux%F, Flux%G)
     
     ! Evaluate dqdt
-    call imposeBC(F, G)
-    call eval_dqdt_FG(dqdt, q, F, G)
-
-    deallocate(dqy_G)
-    deallocate(dqx_G)
-    deallocate(dqy_F)
-    deallocate(dqx_F)
-    deallocate(G)
-    deallocate(F)
+    call eval_dqdt_FG(dqdt, q, Flux%F, Flux%G)
     
   end subroutine eval_dqdt_K
   
   subroutine eval_dqdt_FG(dqdt, q, F, G)
-    ! Assumed zero flux BC
     type(field), intent(inout) :: dqdt
     type(field), intent(in) :: q
-
+    
     real(kind=dp), dimension(:,:) :: F, G
-
     integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-
-
-    lq => q%data
-    ldqdt => dqdt%data
 
     do j = 1, q%n
       do i = 1, q%m
-        ldqdt(i,j) = ldqdt(i,j) -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
+        dqdt%data(i,j) = dqdt%data(i,j) -F(i+1,j) +F(i,j) -G(i,j+1) +G(i,j)
       end do
     end do
     
   end subroutine eval_dqdt_FG
-  
-  ! Consider the ghost point
-  subroutine eval_dqdt_scr_nonstat(dqdt, q, t)
-    type(field), intent(inout) :: dqdt
-    type(field), intent(in) :: q
-    real(kind = dp), intent(in) :: t
-
-    integer :: i, j
-    real(kind = dp), dimension(:, :), pointer :: ldqdt, lq
-    
-    real(kind = dp) :: x, y
-
-    lq => q%data
-    ldqdt => dqdt%data
-    
-    do j = 1, q%n
-      do i = 1, q%m
-        x = fld_x(i, q%m, q%type_id)
-        y = fld_x(j, q%n, q%type_id)
-        ldqdt(i,j) = ldqdt(i,j) + S_rhs_nonstat(x, y, t)
-      end do
-    end do
-
-  end subroutine eval_dqdt_scr_nonstat
 
   subroutine timestep_fe(q, dqdt, dt)
     type(field), intent(inout) :: q
@@ -337,11 +332,11 @@ contains
 
   end subroutine timestep_fe
   
-  subroutine timestep_heun_K(q, dt, K_e)
+  subroutine timestep_heun_K(q, Flux, dt, KGrid)
     ! Heun's method
     type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
+    type(FluxGrid), intent(inout) :: Flux
+    type(K_grid), intent(in) :: KGrid
     real(kind = dp), intent(in) :: dt
 
     type(field) :: dqdt
@@ -352,14 +347,14 @@ contains
 
     ! Evaluate dqdt and copy q to qc
     call zeros(dqdt)
-    call eval_dqdt_K(dqdt, q, K_e)
+    call eval_dqdt_K(dqdt, Flux, q, KGrid)
     call set(qc, q)
 
     ! Prediction step
     call timestep_fe(qc, dqdt, dt)
 
     ! Correction step (add to dqdt)
-    call eval_dqdt_K(dqdt, qc, K_e)
+    call eval_dqdt_K(dqdt, Flux, qc, KGrid)
     
     ! Full timestepping
     call timestep_fe(q, dqdt, 0.5_dp*dt)
@@ -369,96 +364,36 @@ contains
 
   end subroutine timestep_heun_K
   
-  subroutine eval_dqdt_K_scr_nonstat(dqdt, q, t, K_e)
-    type(field), intent(inout) :: dqdt
-    type(field), intent(in) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: t
-
-    call eval_dqdt_K(dqdt, q, K_e) ! From diffusion
-    call eval_dqdt_scr_nonstat(dqdt, q, t) ! From source term
-    
-  end subroutine eval_dqdt_K_scr_nonstat
-  
-  subroutine timestep_heun_K_Src_nonstat(q, dt, t, K_e)
-    ! Heun's method
+  subroutine timestep_LMT_2D(q, Flux, dt, uv_fld)
     type(field), intent(inout) :: q
-    type(K_flux), intent(in) :: K_e
-
-    real(kind = dp), intent(in) :: dt, t
-
-    type(field) :: dqdt
-    type(field) :: qc
-
-    call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
-    call allocate(qc, q%m, q%n, 'qc', type_id=q%type_id)
-
-    ! Evaluate dqdt and copy q to qc
-    call set(qc, q)
-    call zeros(dqdt)
-    call eval_dqdt_K_scr_nonstat(dqdt, q, t, K_e)
-
-    ! Prediction step
-    call timestep_fe(qc, dqdt, dt)
-
-    ! Correction step
-    call eval_dqdt_K_scr_nonstat(dqdt, qc, t+dt, K_e)
-
-    ! Full timestepping
-    call timestep_fe(q, dqdt, 0.5_dp*dt)
-    
-    call deallocate(qc)
-    call deallocate(dqdt)
-
-  end subroutine timestep_heun_K_Src_nonstat
-  
-  subroutine timestep_LMT_2D(q, dt, uv_fld)
-    type(field), intent(inout) :: q
+    type(FluxGrid), intent(inout) :: Flux
     type(uv_signed), intent(in) :: uv_fld
-
     real(kind = dp), intent(in) :: dt
-    real(kind=dp), dimension(:,:), allocatable :: F, G, dqx, dqy
 
     type(field) :: dqdt
     
     call allocate(dqdt, q%m, q%n, 'dqdt', type_id=q%type_id)
-
-    allocate(F(q%m+1, q%n))
-    allocate(G(q%m, q%n+1))
-    allocate(dqx(q%m+1, q%n))
-    allocate(dqy(q%m, q%n+1))
-
-    ! F, G at boundaries will not be touched
-    F = 0.0_dp
-    G = 0.0_dp
-    dqx = 0.0_dp
-    dqy = 0.0_dp
     
     ! DCU + 1D limiter
-    call assemble_F_DCU(F, q, uv_fld%up, uv_fld%um)
-    call dx_field(dqx, q)
-    call assemble_F_limiter(F, dqx, uv_fld%u_sgn, uv_fld%u_abs, dt)  ! Apply limiter
+    call assemble_F_DCU(Flux%F, q, uv_fld%up, uv_fld%um)
+    call dx_field(Flux%dqx_F, q)
+    call assemble_F_limiter(Flux%F, Flux%dqx_F, uv_fld%u_sgn, uv_fld%u_abs, dt)  ! Apply limiter
 
-    call assemble_G_DCU(G, q, uv_fld%vp, uv_fld%vm)
-    call dy_field(dqy, q)
-    call assemble_G_limiter(G, dqy, uv_fld%v_sgn, uv_fld%v_abs, dt)  ! Apply limiter
+    call assemble_G_DCU(Flux%G, q, uv_fld%vp, uv_fld%vm)
+    call dy_field(Flux%dqy_G, q)
+    call assemble_G_limiter(Flux%G, Flux%dqy_G, uv_fld%v_sgn, uv_fld%v_abs, dt)  ! Apply limiter
     
     ! CTU ( for 2nd order )
-    call assemble_FG_CTU(F, G, dqx, dqy, uv_fld%up, uv_fld%um, uv_fld%vp, uv_fld%vm, dt)
+    call assemble_FG_CTU(Flux%F, Flux%G, Flux%dqx_F, Flux%dqy_G, uv_fld%up, uv_fld%um, uv_fld%vp, uv_fld%vm, dt)
 
-    call imposeBC(F, G)
+    call imposeBC(Flux%F, Flux%G)
     
     call zeros(dqdt)
-    call eval_dqdt_FG(dqdt, q, F, G)
+    call eval_dqdt_FG(dqdt, q, Flux%F, Flux%G)
     call timestep_fe(q, dqdt, dt)
 
     ! Deallocate
     call deallocate(dqdt)
-    deallocate(dqy)
-    deallocate(dqx)
-    deallocate(F)
-    deallocate(G)
 
   end subroutine timestep_LMT_2D
   
@@ -497,21 +432,24 @@ contains
 
     integer :: i
     type(uv_signed) :: uv_fld
-    type(K_flux) :: K_e
+    type(K_grid) :: KGrid
+    type(FluxGrid) :: Flux
     real(kind=dp) :: dt
     
     call allocate(uv_fld, psi)
-    call allocate(K_e, K11, K22, K12)
+    call allocate(KGrid, K11, K22, K12)
+    call allocate(Flux, q%m, q%n)
     
     dt = T/nts
     do i = 1, nts
-      call timestep_heun_K(q, 0.5_dp*dt, K_e)
-      call timestep_LMT_2D(q, dt, uv_fld)
-      call timestep_heun_K(q, 0.5_dp*dt, K_e)
+      call timestep_heun_K(q, Flux, 0.5_dp*dt, KGrid)
+      call timestep_LMT_2D(q, Flux, dt, uv_fld)
+      call timestep_heun_K(q, Flux, 0.5_dp*dt, KGrid)
     end do
 
     call deallocate(uv_fld)
-    call deallocate(K_e)
+    call deallocate(KGrid)
+    call deallocate(Flux)
 
   end subroutine advdiff_q
 
