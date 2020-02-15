@@ -16,7 +16,7 @@ program advdiff
   integer :: Td, layer, NPart, Phase, Seed_ID
   character(len=128) :: path_arg
   
-#if 0
+#if 1
   ! Main program
   if (command_argument_count() > 0) then
 !     write(6, "(a)") &
@@ -38,16 +38,14 @@ program advdiff
     
     call get_command_argument(6, path_arg)
     
-!     write(6, "(a, i0, a, i0, a, i0, a, i0, a, i0)") " SampInt = ", Td, &
-!               & "d; Layer = ", layer, "; NPart = ", NPart, "; Phase = ", Phase, & 
-!               & "; Seed_ID = ", Seed_ID
   else
     call abort_handle("Invalid input to the programme", __FILE__, __LINE__)
   end if
   
   call inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
-#endif
+#else
   call unittest()
+#endif
 
 contains
 
@@ -86,7 +84,8 @@ contains
     type(jumpsdat), dimension(:), allocatable :: jumps
     type(trajdat) :: traj
 
-    integer :: m, n, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_Ind, n_Ind
+    integer, parameter :: m_solver = 64  ! solver grid
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_MAP, dof_old
@@ -132,25 +131,28 @@ contains
 
     integer, dimension(4) :: SEED
     
-    ! m, n: DOF/control
     if (index(path_arg, "QGM2") .gt. 0) then
       write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
+    ! m, n: DOF/control
       m = 16
       n = 16
-      ! m_solver: solver grid
-      m_solver = 64
       ! m_Ind, n_Ind: indicator functions
       m_Ind = 16
       n_Ind = m_Ind
     elseif (index(path_arg, "TTG_sinusoidal") .gt. 0) then
       write(RunProfile, "(a,i0)") "TTG_sinusoidal_NPART", NPart
+    ! m, n: DOF/control
       m = 8
       n = 8
-      ! m_solver: solver grid
-      m_solver = 64
       ! m_Ind, n_Ind: indicator functions
       m_Ind = 8
       n_Ind = m_Ind
+    else
+      m = -999
+      n = -999
+      m_Ind = -999
+      n_Ind = -999
+      call abort_handle("Invalid Path!", __FILE__, __LINE__) 
     end if
 
     write(Td_char, "(a,i0,a)") "h", Td, "d"
@@ -178,6 +180,11 @@ contains
       restart_ind = -1
       write(input_fld, "(a,a)") trim(fld_tmp), "Tuned/" 
       write(output_fld, "(a,a)") trim(fld_tmp), "Data/"
+    else
+      niter = -999
+      output_dn = -999
+      restart_ind = -999
+      call abort_handle("Invalid Path!", __FILE__, __LINE__) 
     end if
     
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions

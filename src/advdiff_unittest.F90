@@ -812,15 +812,25 @@ contains
   
   subroutine unittest_solver_convergence()
     integer :: i, m
-    integer :: nts, C
+    integer :: nts, C, testcase
     character(len = 256) :: scr_lne, filename
     
     ! Test temporal accuarcy (periodic solution)
-    C = 2
+    C = 16
+#if TESTCASE == 0
+    testcase = 0
+#elif TESTCASE == 1
+    testcase = 1
+#else
+    stop
+#endif
+    
 #if MC0LW1 == 0
-    write(filename, "(a,i0,a)") "./output/MC_Strang.txt"
+    write(filename, "(a, i0, a)") "./output/MC_Strang_case",testcase,".txt"
 #elif MC0LW1 == 1
-    write(filename, "(a,i0,a)") "./output/LW_Strang.txt"
+    write(filename, "(a, i0, a)") "./output/LW_Strang_case",testcase,".txt"
+#else
+    stop
 #endif
 
     open(unit = output_unit, file = trim(filename), &
@@ -828,7 +838,7 @@ contains
     write(output_unit, "(a)") "% Timestepping to periodic state"
     write(output_unit, "(a)") "% Scale dt = 1/C dx"
     write(output_unit, "(a,i0,a)") "% nts =", C,"*m"
-    do i = 1, 5
+    do i = 1, 8
       m = 2 ** (i+3)
       nts = C* m
       write(scr_lne, "(a,i0,a,i6,a,i0,a,i6,a,i0,a,"//dp_chr//")") &
@@ -856,8 +866,8 @@ contains
     type(FluxGrid) :: Flux
 
     real(kind=dp), parameter :: Pi = 4.0_dp* datan (1.0_dp)
-    real(kind=dp), parameter :: T = 0.2_dp * 2.0_dp
-!     real(kind=dp), parameter :: T = 1.0_dp
+!    real(kind=dp), parameter :: T = 0.2_dp * 2.0_dp
+    real(kind=dp), parameter :: T = 1.0_dp
    
     type(field) :: q_exact, q_err
     real(kind=dp) :: t_i, err_int, err_sup, dt

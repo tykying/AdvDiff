@@ -100,12 +100,9 @@ contains
     dof%ndof = m_psi*n_psi + 3*(m_K*n_K)
 
     ! Defined at corners + DOF -> -1
-    type_id = -1  ! NOT including the boundaries (assumed zeros, hence not DOF)
-    call allocate(dof%psi, m_psi, n_psi, 'psi', type_id)
-
-    ! Defined at cell centre + DOF -> -2
-    type_id = -1  ! Including the boundaries
-    call allocate(dof%K11, m_K, n_K, 'K11', type_id)
+    type_id = -1
+    call allocate(dof%psi, m_psi, n_psi, 'psi', type_id) ! NOT include the boundaries
+    call allocate(dof%K11, m_K, n_K, 'K11', type_id) ! Include the boundaries
     call allocate(dof%K22, m_K, n_K, 'K22', type_id)
     call allocate(dof%K12, m_K, n_K, 'K12', type_id)
     
@@ -919,7 +916,7 @@ contains
     integer :: canon_id
     
     do canon_id = 1, size(canon_SSD, 1)
-      if (accept_ratio(canon_id) .ge. 0.35_dp) then
+      if (accept_ratio(canon_id) .ge. 0.50_dp) then
         canon_SSD(canon_id) = canon_SSD(canon_id) * 1.50_dp
       elseif  (accept_ratio(canon_id) .le. 0.15_dp) then
         canon_SSD(canon_id) = canon_SSD(canon_id) * 0.50_dp
