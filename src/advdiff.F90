@@ -16,7 +16,7 @@ program advdiff
   integer :: Td, layer, NPart, Phase, Seed_ID
   character(len=128) :: path_arg
   
-#if 1
+#if 0
   ! Main program
   if (command_argument_count() > 0) then
 !     write(6, "(a)") &
@@ -51,6 +51,7 @@ contains
 
   subroutine unittest()
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
+!    call unittest_evaluate_logPost(32, 2, 676, 3, 1)
     call unittest_comptools()
     call unittest_trajdata()
     call unittest_solver_properties()

@@ -15,6 +15,7 @@ module advdiff_unittest
   public :: unittest_operator_order, unittest_BCflux_order, unittest_solver_convergence
   public :: unittest_IO, unittest_timer
   public :: unittest_FPsolver_INPUT, unittest_interpolation
+  public :: try_evaluate_logPost
   
   integer, dimension(4) :: SEED = (/ 314, 159, 26, 535 /)
 
@@ -1550,6 +1551,140 @@ contains
     
     testcase_intpl = 2.0_dp * x + 3.0_dp * y
   end function testcase_intpl
+  
+  subroutine try_evaluate_logPost(Td, layer, NPart, Phase, Seed_ID)
+    use mpi
+    integer, intent(in) :: Td, layer, NPart, Phase, Seed_ID
+    
+    type(jumpsdat), dimension(:), allocatable :: jumps
+    type(trajdat) :: traj
+
+    integer :: m, n, m_Ind, n_Ind
+    integer, parameter :: m_solver = 64  ! solver grid
+    type(meshdat) :: mesh
+
+    type(dofdat) :: dof
+    type(IndFndat) :: IndFn
+    
+    real(kind=dp) :: sc, h, dt
+    integer :: nts
+    
+    real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
+
+    character(len = 128) :: RunProfile
+    character(len = 256) :: output_fld, Td_char, resol_param
+    character(len = 256) :: input_fld, fld_tmp
+    
+#if EM_MEAN == 1
+    ! Use Eulerian time-average
+    type(field) :: psi_EM
+    real(kind=dp) :: t_avg
+#endif
+    
+    ! Prior
+    type(priordat) :: prior_param
+    
+    integer :: restart_ind
+    integer :: output_dn
+
+    ! MPI
+    integer :: my_id, num_procs
+    integer :: ierr !, PROVIDED, !! PROVIDED: For MPI-OpenMP
+    real(kind=dp) :: SlogPost_local, SlogPost_global
+    
+    m = 16
+    n = 16
+    m_Ind = 16
+    n_Ind = m_Ind
+   
+    write(Td_char, "(a,i0,a)") "h", Td, "d"
+    write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
+    
+    output_dn = 0
+    restart_ind = -1
+    write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
+    write(fld_tmp, "(a,a,a,a,a,a,a)") "./eddie/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
+    if (Phase .eq. 1) then
+      write(input_fld, "(a,a,i0,a)") trim(fld_tmp), "Seed", Seed_ID, "/SpinUp/"
+    elseif (Phase .eq. 2) then
+      write(input_fld, "(a,a,i0,a)") trim(fld_tmp), "Seed", Seed_ID, "/Tuned/"
+    elseif (Phase .eq. 3) then
+      write(input_fld, "(a,a,i0,a)") trim(fld_tmp), "Seed", Seed_ID, "/Data/"
+    end if
+    
+    call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
+    ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
+
+    call MPI_INIT( ierr )
+    call MPI_COMM_RANK(MPI_COMM_WORLD, my_id, ierr)
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
+    call MPI_COMM_SIZE(MPI_COMM_WORLD, num_procs, ierr)
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
+    
+    call allocate(IndFn, m_Ind, n_Ind, my_id, num_procs)
+    
+    ! Initialise fields
+    sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
+
+    if (restart_ind .ne. 0) then
+      call read_theta(dof, trim(input_fld)//"theta", sc, restart_ind)
+    else
+      call allocate(dof, m-1, n-1, m+1, n+1)
+      call init_dof(dof, sc)
+    end if
+
+    call allocate(prior_param, sc)
+    
+    ! Read trajectory
+    call read(traj, "./trajdat/"//trim(RunProfile)//"/"//trim(Td_char))
+
+    ! Ensure the positions are normalised
+    if (.not. check_normalised_pos(traj)) then
+      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
+    end if
+
+    ! Allocate array of jumps with initial positions
+    call allocate(jumps, mesh)
+    ! Convert trajectory into jumps
+    call traj2jumps(jumps, traj, mesh)
+    call deallocate(traj)
+    
+    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
+    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
+
+    ! Calculate nts = number of timesteps needed in solving FP
+    dt = 6.0_dp*3600.0_dp  ! 6 hours, in seconds
+    nts = int((h/sc)/dt)
+    
+    SlogPost_local = evaluate_logPost_OMP(prior_param, jumps, IndFn, mesh, dof, h, nts)
+    
+    SlogPost_global = 0.0_dp
+    call MPI_Reduce(SlogPost_local, SlogPost_global, 1, MPI_DOUBLE_PRECISION, MPI_SUM, &
+             (num_procs-1), MPI_COMM_WORLD, ierr)
+    if (ierr .ne. MPI_SUCCESS) then 
+      call abort_handle("MPI Failed", __FILE__, __LINE__) 
+    end if
+    
+    dof%SlogPost = SlogPost_global
+    
+    if (my_id .eq. (num_procs-1)) then
+      write(6, "(a, "//dp_chr//")")  "logPost = ", dof%SlogPost
+    end if
+    
+    ! Release memory
+    call deallocate(prior_param)
+    
+    call deallocate(dof)
+    call deallocate(IndFn)
+    call deallocate(jumps)
+
+    call MPI_FINALIZE(ierr)
+
+  end subroutine try_evaluate_logPost
   
 end module advdiff_unittest
 
