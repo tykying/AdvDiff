@@ -16,7 +16,7 @@ module advdiff_field
   public :: indicator_field
   public :: uv_signed, K_grid, FluxGrid
   public :: print_info, diff_int, fld_x
-  public :: bilinear_intpl, pwc_intpl, sine_filter, linear_intpl
+  public :: bilinear_intpl, pwc_intpl, coarsen_filter, linear_intpl
   public :: neg_int
   public :: dt_CFL
   
@@ -115,60 +115,35 @@ contains
 
   end subroutine deallocate_field
 
-#include "advdiff_configuration.h"
-  subroutine sine_filter(out, in)
-#if FFTW3 == 1
-    ! in, out: no boundaries => size(in) = [2^m+1-2, 2^n+1-2]
-    use, intrinsic :: iso_c_binding 
-    include 'fftw3.f03'
-
-    real(kind=dp), dimension(:, :), intent(out) :: out
+  subroutine coarsen_filter(out, in, mp1, np1)
+    ! in, out: defined at corners
+    ! size(in) = [2^m+1, 2^n+1]
+    real(kind=dp), dimension(:, :), intent(inout) :: out
     real(kind=dp), dimension(:, :), intent(in) :: in
-  
-    type(C_PTR) :: plan
-    real(kind=dp), dimension(:, :), allocatable :: Bpq, Bpq_pad
-    real(kind=dp), dimension(:, :), allocatable :: in_copy
+    real(kind=dp), dimension(:, :), allocatable :: tmp
+    integer, intent(in) :: mp1, np1
     
-    integer :: i, j
+    integer :: i, j, Mx, My
     
-    allocate(Bpq(size(in,1), size(in,2)))
-    allocate(in_copy(size(in,1), size(in,2)))
-    allocate(Bpq_pad(size(out,1), size(out,2)))
-
-    in_copy = in
+    Mx = (size(in, 1)-1)/(mp1-1)
+    My = (size(in, 2)-1)/(np1-1)
     
-    ! Forward DCT
-    plan = fftw_plan_r2r_2d(size(in,2),size(in,1), in_copy, Bpq,  &
-                            FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, in_copy, Bpq)
-    call fftw_destroy_plan(plan)
+    allocate(tmp(mp1, np1))
     
-!     call print_array(Bpq, "Bpq")
+    do j = 1, size(tmp, 2)
+      do i = 1, size(tmp, 2)
+        ! Pick up nodal values
+        tmp(i, j) = in(Mx*(i-1)+1, My*(j-1)+1)
+      end do
+    end do
     
-    ! Zero padding: only need to pad zeros beyond Bpq
-    !! Relationship with matlab dct2
-    !! http://www.voidcn.com/article/p-pduypgxe-du.html
-    Bpq_pad = Bpq(1:size(Bpq_pad,1), 1:size(Bpq_pad,2))
+    Mx = (size(out, 1)-1)/(mp1-1)
+    My = (size(out, 2)-1)/(np1-1)
+    call bilinear_intpl(out, tmp, Mx, My)
     
-    plan = fftw_plan_r2r_2d(size(out,2),size(out,1), Bpq_pad, &
-                          out, FFTW_RODFT00, FFTW_RODFT00, FFTW_ESTIMATE)
-    call fftw_execute_r2r(plan, Bpq_pad, out)
-    call fftw_destroy_plan(plan)
-
-    out = out/(4*(size(in,1)+1)*(size(in,2)+1))
+    deallocate(tmp)
     
-    deallocate(Bpq)
-    deallocate(Bpq_pad)
-    deallocate(in_copy)
-    call fftw_cleanup()
-#else
-    real(kind=dp), dimension(:, :), intent(out) :: out
-    real(kind=dp), dimension(:, :), intent(in) :: in
-    
-    call abort_handle("No FFTW3 library", __FILE__, __LINE__)
-    out = 0.0_dp * in(1,1)
-#endif
-  end subroutine sine_filter
+  end subroutine coarsen_filter
 
   subroutine linear_intpl(out, in)
     real(kind=dp), dimension(:), intent(out) :: out

@@ -15,7 +15,7 @@ module advdiff_unittest
   public :: unittest_operator_order, unittest_BCflux_order, unittest_solver_convergence
   public :: unittest_IO, unittest_timer
   public :: unittest_FPsolver_INPUT, unittest_interpolation
-  public :: try_evaluate_logPost
+  public :: try_evaluate_logPost, evaluate_numerical_diffusion
   
   integer, dimension(4) :: SEED = (/ 314, 159, 26, 535 /)
 
@@ -587,7 +587,7 @@ contains
     call allocate(K22, m, n, 'K22', type_id=1)
     call allocate(K12, m, n, 'K12', type_id=1)
 
-    ! Ridge body rotation for psi
+    ! Sin rotation for psi
     do j = 1, size(psi%data,2)
       do i = 1, size(psi%data,1)
         x = fld_x(i, psi%m, psi%type_id)  ! in [0, 1]
@@ -1572,7 +1572,7 @@ contains
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
 
     character(len = 128) :: RunProfile
-    character(len = 256) :: output_fld, Td_char, resol_param
+    character(len = 256) :: Td_char, resol_param
     character(len = 256) :: input_fld, fld_tmp
     
 #if EM_MEAN == 1
@@ -1685,6 +1685,137 @@ contains
     call MPI_FINALIZE(ierr)
 
   end subroutine try_evaluate_logPost
+  
+  subroutine evaluate_numerical_diffusion()
+    type(field) :: q, K11, K22, K12, psi
+    integer :: m, n
+    integer :: i, j, k, k10
+
+    real(kind=dp) :: t
+    real(kind=dp) :: dt
+    integer :: nts
+
+    type(field) :: q0
+    real(kind=dp) :: q_int_0, x, y
+    real(kind=dp), parameter :: eps = 1D-14
+    
+    real(kind = dp), parameter :: Pi = 4.0_dp * atan (1.0_dp)
+    type(meshdat) :: mesh
+
+    real(kind=dp), dimension(3) :: Gauss_param    !=(mean_x, mean_y, sigma)
+    real(kind=dp), parameter :: Gauss_sigma = 1.0_dp/32.0_dp
+    real(kind=dp) :: q_sq_int, dq_sq_int, q_sq_int_old, K_inst, K_avg
+    real(kind=dp), dimension(:), allocatable :: K_small_arr, K_avg_arr
+    integer :: K_avg_counter, K_nscale
+    
+    m = 64+1
+    n = 64+1
+!     m = 8+1
+!     n = 8+1
+    call allocate(mesh, m, n)  ! Needs to be identical in both directions
+    call allocate(q, m, n, 'q', type_id=2)
+    call allocate(q0, m, n, 'q0', type_id=2)
+    call allocate(psi, m, n, 'psi', type_id=1)
+    call allocate(K11, m, n, 'K11', type_id=1)
+    call allocate(K22, m, n, 'K22', type_id=1)
+    call allocate(K12, m, n, 'K12', type_id=1)
+
+    ! Rigid body rotation for psi
+    do j = 1, size(psi%data,2)
+      do i = 1, size(psi%data,1)
+        x = fld_x(i, psi%m, psi%type_id)  ! in [0, 1]
+        y = fld_x(j, psi%n, psi%type_id)  ! in [0, 1]
+        psi%data(i, j) = psi%m*psi%n/(Pi**2) *dsin(Pi*x)*dsin(Pi*y)
+      end do
+    end do
+    
+    K_nscale = 10
+    allocate(K_small_arr(K_nscale))
+    allocate(K_avg_arr(K_nscale))
+    
+    do k10 = 1, K_nscale
+      K_small_arr(k10) = 10.0_dp**(-k10+4)
+      
+      call set(K11, K_small_arr(k10))
+      call set(K22, K_small_arr(k10))
+      call set(K12, 0.0_dp)
+      
+      ! Reset q
+      call zeros(q)
+      
+      Gauss_param = (/ 0.5_dp, 0.5_dp, Gauss_sigma /)
+      call initialise_q_Gauss(q, Gauss_param, mesh)
+
+      call set(q0, q)
+      q_int_0 = int_field(q)
+      
+!       t = 0.001_dp * Pi
+      t = 0.0000001_dp
+      nts = 10000
+      dt = t/nts
+!       call print_info(psi, t/nts)
+  !     call print_array(q%data, "q%data")
+      
+      K_avg = 0.0
+      K_avg_counter = 0
+      
+      q_sq_int_old = int_grad_sq_field(q)
+      do k = 1, nts
+        call advdiff_q(q, psi, K11, K22, K12, dt, 1)
+        dq_sq_int = int_grad_sq_field(q)
+        q_sq_int = int_sq_field(q)
+        
+        K_inst = -(q_sq_int-q_sq_int_old)/(2.0_dp*dt*dq_sq_int)
+        if (k .ge. nts/2) then
+          K_avg_counter = K_avg_counter + 1
+          K_avg  = K_avg + K_inst
+        end if 
+        
+        q_sq_int_old = q_sq_int
+      end do
+      
+      K_avg_arr(k10) = K_avg/K_avg_counter
+      !write(6, *) K_avg_arr(k10), " ", K_inst
+      
+      ! Test mass conservation
+      if (diff_int(q, q0)/q_int_0 .le. 100.0_dp*eps) then
+        write(6, *) " -- P: Total mass conserved --"
+      else
+        write(6, "(a,"//dp_chr//")") "Difference in mass = ", diff_int(q, q0)
+        call abort_handle(" ! FAIL  @ Mass conversation", __FILE__, __LINE__)
+      end if
+    end do
+    
+    call print_array(K_small_arr, "K")
+    call print_array(K_avg_arr, "K_avg")
+
+    
+    deallocate(K_small_arr)
+    deallocate(K_avg_arr)
+    
+    call deallocate(q)
+    call deallocate(q0)
+    call deallocate(psi)
+    call deallocate(K11)
+    call deallocate(K22)
+    call deallocate(K12)
+  
+  end subroutine evaluate_numerical_diffusion
+  
+  pure real(kind=dp) function int_grad_sq_field(fld)
+    type(field), intent(in) :: fld
+    integer :: i, j
+
+    int_grad_sq_field = 0.0_dp
+
+    do j = 2, (fld%n-1)
+      do i = 2, (fld%m-1)
+        int_grad_sq_field = int_grad_sq_field + (fld%data(i+1,j)-fld%data(i-1,j))**2 &
+                      + (fld%data(i,j+1)-fld%data(i,j-1))**2
+      end do
+    end do
+
+  end function int_grad_sq_field
   
 end module advdiff_unittest
 

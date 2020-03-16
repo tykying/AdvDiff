@@ -16,7 +16,7 @@ program advdiff
   integer :: Td, layer, NPart, Phase, Seed_ID
   character(len=128) :: path_arg
   
-#if 0
+#if 1
   ! Main program
   if (command_argument_count() > 0) then
 !     write(6, "(a)") &
@@ -43,15 +43,17 @@ program advdiff
   end if
   
   call inference(Td, layer, NPart, Phase, Seed_ID, path_arg)
+  !call inference_validation(Td, layer, NPart, Phase, Seed_ID, path_arg)
 #else
-  call unittest()
+  call evaluate_numerical_diffusion()
+  !call unittest()
 #endif
 
 contains
 
   subroutine unittest()
     write(6, *) "!!! ----------- Unittests begin ----------- !!!"
-!    call unittest_evaluate_logPost(32, 2, 676, 3, 1)
+!    call try_evaluate_logPost(32, 2, 676, 3, 1)
     call unittest_comptools()
     call unittest_trajdata()
     call unittest_solver_properties()
@@ -64,16 +66,6 @@ contains
     call unittest_solver_convergence()
     write(6, *) "!!! ----------- All unittests passed ----------- !!!"
   end subroutine unittest
-
-  subroutine validation()
-    integer :: Td_i
-    integer, parameter :: layer = 2
-    
-    do Td_i = 1, 3
-      call validate_inference(Td=Td_i*32, layer=layer)
-    end do
-    write(6, *) "!!! ----------- Validation finished ----------- !!!"
-  end subroutine validation
   
 #include "advdiff_configuration.h"
 
@@ -99,7 +91,7 @@ contains
     integer, dimension(:), allocatable :: accept_counter
     real(kind=dp), dimension(:), allocatable :: canon_SSD
     
-    integer :: niter, iter, canon_id, ind
+    integer :: niter, iter, canon_id, ind, step0, step1
     real(kind=dp) :: alphaUniRV
 
     character(len = 128) :: RunProfile
@@ -167,24 +159,40 @@ contains
       niter = 500
       output_dn = 100
       restart_ind = 0
+      step0 = 1
+      step1 = niter
       write(input_fld, "(a,a)") trim(fld_tmp), "" 
       write(output_fld, "(a,a)") trim(fld_tmp), "SpinUp/"
     elseif (Phase .eq. 2) then
       niter = 500
       output_dn = 100
       restart_ind = -1
+      step0 = 1
+      step1 = niter
       write(input_fld, "(a,a)") trim(fld_tmp), "SpinUp/" 
       write(output_fld, "(a,a)") trim(fld_tmp), "Tuned/"
     elseif (Phase .eq. 3) then
       niter = 1000
       output_dn = 1
       restart_ind = -1
+      step0 = 1
+      step1 = 500
       write(input_fld, "(a,a)") trim(fld_tmp), "Tuned/" 
+      write(output_fld, "(a,a)") trim(fld_tmp), "Data/"
+    elseif (Phase .eq. 4) then
+      niter = 1000
+      output_dn = 1
+      restart_ind = 500
+      step0 = 501
+      step1 = 1000
+      write(input_fld, "(a,a)") trim(fld_tmp), "Data/" 
       write(output_fld, "(a,a)") trim(fld_tmp), "Data/"
     else
       niter = -999
       output_dn = -999
       restart_ind = -999
+      step0 = 1
+      step1 = -999
       call abort_handle("Invalid Path!", __FILE__, __LINE__) 
     end if
     
@@ -327,7 +335,7 @@ contains
     call reset(total_timer)
     call start(total_timer)
     
-    do iter = 1, niter
+    do iter = step0, step1
       ! In each iteration loop over all cells
       do canon_id = 1, dof%ndof
         RV_ind = (iter-1)*dof%ndof + canon_id
@@ -452,18 +460,15 @@ contains
 
   end subroutine inference
   
-  subroutine validate_inference(Td, layer)
-    use omp_lib
-    integer, intent(in) :: Td, layer
+  subroutine inference_validation(Td, layer, NPart, Phase, Seed_ID, path_arg)
+    integer, intent(in) :: Td, layer, NPart, Phase, Seed_ID
+    character(len=128), intent(in) :: path_arg
 
-    type(jumpsdat), dimension(:), allocatable :: jumps
-    type(trajdat) :: traj
-
-    integer :: m, n, m_solver, m_Ind, n_Ind
+    integer :: m, n, m_Ind, n_Ind
+    integer, parameter :: m_solver = 64  ! solver grid
     type(meshdat) :: mesh
 
     type(dofdat) :: dof, dof_Davis
-    type(IndFndat) :: IndFn
 
     real(kind=dp) :: sc, h, dt
     integer :: nts
@@ -471,7 +476,8 @@ contains
     real(kind=dp), parameter :: L = 3840.0_dp*1000.0_dp
     
     character(len=256) :: RunProfile
-    character(len=256) :: output_fld, Td_char, resol_param
+    character(len=256) :: Td_char, resol_param
+    character(len=256) :: input_fld
 
     ! Timer
     type(timer), save :: total_timer
@@ -479,7 +485,6 @@ contains
     ! Use Eulerian time-average
     type(field) :: psi_EM
     real(kind=dp) :: t_avg
-    integer :: nEMx, nEMy 
     character(len=256) :: KDavis_fld
     ! Use Eulerian time-average
     
@@ -495,63 +500,50 @@ contains
     real(kind=dp), parameter :: Gauss_sigma = 1.0_dp/32.0_dp
     integer :: i, j, nx, ny, DavisID
     
-    write(RunProfile, "(a,i0,a)") "QGM2_L", layer, "_NPART676"
-    
+    write(RunProfile, "(a,i0,a,i0)") "QGM2_L", layer, "_NPART", NPart
     ! m, n: DOF/control
     m = 16
     n = 16
-    ! m_solver: solver grid
-    m_solver = 64
     ! m_Ind, n_Ind: indicator functions
     m_Ind = 16
     n_Ind = m_Ind
     
     write(Td_char, "(a,i0,a)") "h", Td, "d"
     write(resol_param, "(a,i0,a,i0,a,i0)") "N",m_solver*m_solver,"_D", m*n, "_I", m_Ind*n_Ind
-    write(output_fld, "(a,a,a,a,a,a,a)") "./output/", trim(resol_param), "/", trim(RunProfile), "/", trim(Td_char), "/"
-    write(6, "(a, a)") "Output path: ", trim(output_fld)
+    if (Phase .eq. 1) then
+      write(input_fld, "(a,a)") trim(path_arg), "/SpinUp/"
+      write(output_q, "(a,a,a,a,a,a,a,i0,a)") "./output/", trim(resol_param), "/", &
+            trim(RunProfile), "/", trim(Td_char), "/Seed", Seed_ID, "/SpinUp/"
+    elseif (Phase .eq. 2) then
+      write(input_fld, "(a,a)") trim(path_arg), "/Tuned/"
+      write(output_q, "(a,a,a,a,a,a,a,i0,a)") "./output/", trim(resol_param), "/", &
+            trim(RunProfile), "/", trim(Td_char), "/Seed", Seed_ID, "/Tuned/"
+    elseif (Phase .eq. 3) then
+      write(input_fld, "(a,a)") trim(path_arg), "/Data/"
+      write(output_q, "(a,a,a,a,a,a,a,i0,a)") "./output/", trim(resol_param), "/", &
+            trim(RunProfile), "/", trim(Td_char), "/Seed", Seed_ID, "/Data/"
+    end if
     
-    m_solver = 64
+    write(6, "(a, a)") "Read MAP estimates from path: ", trim(input_fld)
+    write(6, "(a, a)") "Output to path: ", trim(output_q)
+    
     call allocate(mesh, m_solver, m_solver)  ! Needs to be identical in both directions
     ! N.B. assumed zeros at boundaries of psi-> hence only need (m-1)*(n-1) instead of (m+1)*(n+1)
     
     ! Initialise fields
     sc = real(mesh%m,kind=dp)/L     ! Needs mesh to be identical in both directions
-    call read_theta(dof, trim(output_fld)//"theta_sigma", sc, restart_ind)
-!     call allocate(dof, m-1, n-1, m/2+1, n/2+1)
-!     call init_dof(dof, sc)
+    call read_theta(dof, trim(input_fld)//"theta", sc, restart_ind)
     
-    ! Read trajectory
-    call read(traj, "./trajdat/"//trim(RunProfile)//"/"//trim(Td_char))
-    
-    ! Ensure the positions are normalised
-    if (.not. check_normalised_pos(traj)) then
-      call abort_handle("E: particle out of range [0, 1]", __FILE__, __LINE__)
-    end if
-    
-    ! Allocate array of jumps with initial positions
-    call allocate(jumps, mesh)
-    
-    ! Convert trajectory into jumps
-    call traj2jumps(jumps, traj, mesh)
-    call deallocate(traj)
-    
-    ! Determine h: Assumed h = uniform; assumed mesh%m = mesh%n
-    h = read_uniform_h(jumps) *real(mesh%m, kind=dp)   ! *m to rescale it to [0, mesh%m]
+    h = real(Td, kind=dp) * 24.0_dp*3600.0_dp * sc
     
     ! Calculate nts = number of timesteps needed in solving FP
     dt = 12.0_dp*3600.0_dp  ! 1.5 hours, in seconds
     nts = int((h/sc)/dt)    ! 2 hours time step
     
-    ! Alternative
-    call allocate(IndFn, m_Ind, n_Ind)
-    
     ! Print info to screen
     call print_info(mesh)
     call print_info(dof)
-    call print_info(IndFn)
     call print_info(h, nts, sc)
-!     call print_info(jumps, mesh)
     
     ! Timer
     call reset(total_timer)
@@ -559,6 +551,7 @@ contains
     
     call allocate(dof_solver, mesh)
     call intpl_dof_solver(dof_solver, dof, mesh)
+    call deallocate(dof)
     
     dt_arg = h/nts
     dt_min = dt_CFL(dof_solver%psi, 0.1_dp)
@@ -578,14 +571,9 @@ contains
         Gauss_param = (/ fld_x(i, nx, 2), fld_x(j, ny, 2), Gauss_sigma /)
         
         call initialise_q_Gauss(q, Gauss_param, mesh)
-        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/"
         call write(q, trim(output_q)//"q0", 0.0_dp, INDk)
         
         call advdiff_q(q, dof_solver%psi, dof_solver%K11, dof_solver%K22, dof_solver%K12, h, 2*nts_adapted)
-        
-        write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/"
         call write(q, trim(output_q)//"q", h, INDk)
         
         call deallocate(q)
@@ -595,8 +583,10 @@ contains
     ! Write theta_MAP
     call write_theta(dof_solver, trim(output_q)//"theta_MAP", sc)
     
-    
     ! Davis diffusivity
+    call deallocate(dof_solver)
+    call allocate(dof_solver, mesh)
+
     !! Use Eulerian time-average
     call read_QGfield(psi_EM, t_avg, "./meanflow/psi_int_final", layer)
 
@@ -609,12 +599,11 @@ contains
     
     !N.B.: psi_EM%m = 512
     
-    ! Filter out
-    nEMx = size(psi_EM%data, 1) - 1
-    nEMy = size(psi_EM%data, 2) - 1
-
-    dof_solver%psi%data = 0.0_dp
-    call sine_filter(dof_solver%psi%data(2:m_solver, 2:m_solver), psi_EM%data(2:nEMx, 2:nEMy) )
+    ! Obtain Eulerian mean flow
+    ! Coarse Eulerian mean flow
+    call coarsen_filter(dof_solver%psi%data, psi_EM%data, m+1, n+1) ! m, n: DOF for dof_solver
+    ! Fine Eulerian mean flow
+    ! call coarsen_filter(dof_solver%psi%data, psi_EM%data, m_solver+1, m_solver+1)
     call deallocate(psi_EM)
     
     write(KDavis_fld, "(a,i0,a,i0,a)") "KDavis_L",layer,"_h",Td, "d"
@@ -627,7 +616,9 @@ contains
               &//trim(KDavis_fld), sc)
       else
         write(suffix, "(a)") "_40000"
-        call read_theta(dof_Davis, "./LocalInf/"//trim(KDavis_fld), sc)
+        call read_theta(dof_Davis, "/home/s1046972/opt/qgm2_particle_diagnosis/&
+              &production/DavisDiffusivity/postprocess_output/out/"&
+              &//trim(KDavis_fld), sc)
       end if
       
 !     call write_theta(dof_Davis, trim("./unittest/meanflow/theta_Davis_test"), sc, 0)
@@ -637,7 +628,7 @@ contains
       
       call deallocate(dof_Davis)
       
-      ! Ad-hoc way
+      ! Fill up the right & top boundary value by nearest neighbour
       dof_solver%K11%data(m_solver+1,:) = dof_solver%K11%data(m_solver,:)
       dof_solver%K22%data(m_solver+1,:) = dof_solver%K22%data(m_solver,:)
       dof_solver%K12%data(m_solver+1,:) = dof_solver%K12%data(m_solver,:)
@@ -650,9 +641,6 @@ contains
       
       nts_adapted = max(int(h/dt_min + 0.5_dp), nts)
       write(6, *) "DavisID = ", DavisID, "; nts_adapted = ", nts_adapted, "; dt_min =", dt_min
-      
-      write(output_q, "(a,a,a,a,a,a,a)") "./unittest/validation/", trim(resol_param), "/", &
-                                          trim(RunProfile), "/", trim(Td_char), "/"
       
       do j = 1, ny
         do i = 1, nx
@@ -670,17 +658,14 @@ contains
         end do
       end do
       
-      ! Write theta_MAP
+      ! Write theta
       if (DavisID .eq. 1) then
         call write_theta(dof_solver, trim(output_q)//"theta_Davis", sc, 676)
       else
         call write_theta(dof_solver, trim(output_q)//"theta_Davis", sc, 40000)
       end if
-      
-      
     end do
-!     !! End: Use Eulerian time-average
-        
+    
     ! Timer
     call stop(total_timer)
     write(6, "(a)") "Total timers:"
@@ -688,13 +673,10 @@ contains
     
     ! Release memory
     call deallocate(dof_solver)
-    call deallocate(dof)
-    call deallocate(IndFn)
-    call deallocate(jumps)
     
     write(6, "(a)") &
-    "! ----------- Passed inference ----------- !"
+    "! ----------- Finished inference_validation ----------- !"
 
-  end subroutine validate_inference
+  end subroutine inference_validation
 
 end program advdiff
